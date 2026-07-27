@@ -1,99 +1,108 @@
-# NLM — build notes
+# NLM — v2 build notes
 
-`NLM.pine` is the original NLM indicator with the model stack added on top. Everything above
-the `NLM MODEL EXTENSION` banner is the untouched foundation (sessions, PDH/PDL, PWH/PWL,
-Asia/London, NY intraday, daily/weekly volume profile). No line of it was rewritten; the new
-features read from `levels`, `asiaHigh/Low`, `londonHigh/Low`, `intradayHigh/Low` and
-`activeProfilePoc/Vah/Val` instead of re-deriving session state.
+`NLM.pine` = your original NLM script (untouched, lines 1–914) + a rebuilt model layer below it.
 
-## What is verified vs. what needs the TradingView compiler
+## Verification status — read this first
 
-I have no Pine compiler in this environment, so "verified" below means verified by reading the
-code and by scripted static checks over the whole file, not by a successful compile.
+**I could not compile this.** There is no Pine compiler in this environment, and TradingView's
+editor needs a logged-in account, which I do not have and did not attempt to use. "Verified"
+below means verified by reading plus scripted checks over all 2,641 lines — not by a green
+compile and not by running it on a chart.
 
-### Verified mechanically (scripted checks over all 2361 lines)
+Scripted and clean: no dangling `if`/`for`/`while`/function bodies; no `continue`; no function
+used before its definition; balanced brackets on every line; every `f_*` call site matches its
+definition's parameter count; every `Type.new(...)` uses named arguments and every named argument
+is a real field of that type; every `obj.field` access resolves against the right UDT under
+scope-aware resolution; no global `var` reassigned from inside a function; every array loop
+guarded against the empty-array `-1 to 0` trap.
 
-- **Pitfall 6 — dangling blocks.** Every `if` / `else` / `else if` / `for` / `while` and every
-  `=>` function header is followed by a more-indented line. Zero empty bodies.
-- **Pitfall 5 — `continue`.** Not used anywhere; loops that need to skip use boolean flags
-  (`skip`/`drop`/`removeDrawing`) or `break`.
-- **Pitfall 9 — definition order.** Every `f_*` call site occurs at a line after that
-  function's definition; no call references an undefined function.
-- **Pitfall 4 — globals in functions.** No `var`-declared global is reassigned (`:=`) inside any
-  function body. Helpers either mutate objects/arrays passed in as parameters, or return values
-  that the top level assigns.
-- **Pitfall 7 — constructor field order.** Every `Gap.new`, `Bar3.new`, `Liq.new`, `Brk.new`,
-  `Trade.new`, `PivSeq.new` uses **named** arguments, so field order cannot silently mismatch.
-  (The base script's `Level.new` / `ProfileDrawing.new` / `ProfileBox.new` calls are positional
-  and untouched.)
-- **Loop-range guards.** Every `for i = array.size(x) - 1 to 0` and every
-  `for i = 0 to array.size(x) - 1` is preceded by a size guard, so no loop ever runs the
-  `-1 to 0` ascending range on an empty array.
-- **Pitfall 3 — `var` inside a function returned to the caller.** The persistent collections
-  (`gaps`, `liqs`, `brks`, `trades`, the sweep-watch arrays, the stats arrays) are declared as
-  true globals and passed into helpers as parameters.
+**First thing to do on the chart:** turn on `Panels → Show diagnostics`. The "Feeds live" row
+tells you which of the six gap timeframes are actually running.
 
-### Verified by reading, not by execution
+## Changes to base defaults (three, nothing else)
 
-- **Pitfall 1 — `request.security` at or below the chart timeframe.** `f_resolve()` compares
-  `timeframe.in_seconds(tf)` with `chartSeconds`: equal → the chart's native `time/open/high/
-  low/close` are used and the security result is discarded; lower → the feed is reported
-  unavailable (`ok = false`) and that timeframe simply detects nothing rather than returning
-  degraded data. The diagnostics panel row "Feeds ok (1..6)" shows which timeframes are live.
-  The LTF SMT engine uses the chart's own series for the charted symbol for the same reason;
-  the comparison symbol necessarily goes through `request.security` because it is a different
-  symbol (that is not the degradation case).
-- **Pitfall 2 — offsets inside `request.security`.** No `[n]` is taken inside any security
-  expression list for the 3-candle FVG pattern, and no `[n]` is taken on a security *result*
-  to reconstruct consecutive HTF candles. Instead each timeframe keeps a rolling `Bar3` buffer
-  of the last three genuinely consecutive **completed** candles of that timeframe, appended when
-  the feed's bar time changes. One deliberate exception: `f_pivFeed()` fetches
-  `time[len]` alongside `ta.pivothigh/pivotlow(len, len)`. That is a single scalar resolved in
-  the same context on the same bar as the pivot — it *is* the pivot bar's own timestamp — and it
-  is the only construct that gives an exact anchor. It is not a multi-candle pattern, and the
-  result is never offset outside the call.
-- **Pitfall 8 — things that grow.** Recomputed every bar while active: FVG boxes/CE lines/labels
-  (`f_layoutGap`), breaker boxes/midlines/labels (`f_layoutBrk`), BSL/SSL two-segment rays and
-  the centred label gap (`f_layoutLiq`, gap midpoint recomputed from the live right edge), and
-  trade entry/stop/TP lines plus both zone boxes (`f_updateTrade`). Each freezes at the bar it
-  resolves — swept rays freeze at `sweptTime`, TP lines freeze at the bar they are hit, the whole
-  plan freezes at the resolution bar.
+- `NY reset hour` 0 → **18**, so the trading day rolls at the 18:00 New York futures reopen.
+- `Show POC/VAH/VAL (legacy single profile)` and `Show volume profile bars` → **false**. The new
+  Daily/Weekly profile engine draws those levels with proper `VAH Daily` / `VAH Weekly` naming,
+  and turning the histogram off frees the box budget (it alone can eat ~480 of TradingView's 500).
 
-### Cannot verify without the compiler
+Asia, London, PDH/PDL, PWH/PWL and the live intraday high/low still come from the base engine,
+still carry their dates, still go dashed-and-faded on the sweep, and still roll on the new day.
 
-- Type-qualifier acceptance of a few builtins (`table.new` position, `input.timeframe` passed to
-  a `simple string` parameter). Tables are created with literal positions and repositioned via
-  `table.set_position()` so the input qualifier never has to satisfy a `const` requirement.
-- The exact drawing-object budget. Boxes are the tight resource: the base volume profile can use
-  up to ~480 of the 500 boxes on its own. With profiles on, drop `Historical profiles to keep`
-  or `Profile rows` before complaining that gaps/breakers/plans are missing boxes.
-- Runtime `max_bars_back` behaviour for the dynamic history access in `f_cisdLevel`
-  (`close[i]` / `open[i]` with a series `i`). The walk is capped at `bbCisdLookback`
-  (default 50, max 200) and the indicator declares `max_bars_back = 5000`.
+## What was built to your spec
 
-## Deliberate interpretation calls
+**Gaps.** 30s / 1m / 5m / 15m / 1H / 4H. No daily, weekly or monthly.
+- **Inversion is a body close on the gap's own timeframe.** A 15m gap only inverts when a 15m
+  candle *closes* through it — a 1m close through it does nothing. Each timeframe's inversion
+  pass runs when that timeframe's candle completes, against that candle's close.
+- Re-inversion **deletes** the gap outright (chop), never fades it.
+- BPR needs an FVG forming inside an IFVG **of the same timeframe**; the parent IFVG is removed
+  and the survivor is grey and labelled `1m BPR`.
+- 30s only fires when there is no open 1m gap **and** within 15 bars of a sweep.
+- Style: black outline, dark grey fill, dashed CE midline and the label both green (bullish) or
+  red (bearish), label inside the box at centre-right reading `1m FVG`. Inverted → white fill,
+  `1m IFVG`, midline and text flip to the new direction. Fill transparency rises 6 points per
+  timeframe step, so 4H is the faintest.
+- All gaps extend to exactly 20 bars past the current bar, recomputed every bar.
+- Daily wipe: 30s/1m/5m always; 15m/1H/4H only if price ran through them unrespected.
+- HTF relevance: anything further than 25 × 5m-ATR from price is dropped.
+- First-and-last-of-leg filter: if a move prints five 1m gaps you keep #1 and #5. Respected and
+  inverted gaps are exempt.
 
-- **CISD confirmation direction.** After a CHoCH down the streak that broke structure is
-  bearish, so the CISD level is the open of the oldest candle in that bearish streak and the
-  breaker confirms when price **closes back above** it (mirror for CHoCH up). That is the literal
-  reading of "closes back through that CISD level".
-- **BPR.** When a new FVG forms fully inside an opposite-direction IFVG of the same timeframe,
-  the parent IFVG is deleted and the new gap is drawn grey and labelled `{tf} BPR` — the BPR
-  supersedes the two gaps rather than stacking a third box over them.
-- **Breaker box price span.** `max(open, close)` at the peak anchor bar and `min(open, close)` at
-  the origin anchor bar, captured when the pivot was confirmed rather than re-read later with a
-  dynamic offset.
-- **Trade resolution timing.** TPs and stops are not evaluated on the entry bar, and the stop
-  check on any bar uses the stop value from *before* a breakeven move made on that same bar.
-  Without this a stop anchored below a wick that was swept on the entry bar resolves instantly
-  as a loss.
+**Overlap priority — one deliberate deviation.** You said a higher timeframe trumps an
+overlapping lower one. Applied literally that would delete every 1m gap sitting inside a 5m gap,
+and the confirmation leg of your own model ("1m IFVG out of the 5m or 15m gap") depends on that
+1m gap existing. So pruning runs **within a tier**: 30s vs 1m, 5m vs 15m, 15m/1H/4H. Both of your
+examples (1H beats 15m, 1m beats 30s) behave exactly as you described. `Prune overlaps across
+every timeframe` in the FVG group switches on the literal version if you disagree.
 
-## Diagnostics panel
+**Breaker blocks.** BOS → CHoCH → CISD. The leg anchors freeze at the BOS and never update. The
+CHoCH close *is* the breaker, so nothing is ever labelled CHoCH. The box spans swing low to swing
+high using **bodies only**. A dotted CISD line is drawn and stops the bar a close takes it, which
+confirms the breaker. Light grey box, `1m BB` label at centre-right.
 
-`Panels → Show breaker/leg diagnostics` (on by default, bottom-left) prints the live internal
-state of the leg tracker so a visual mismatch can be checked against numbers instead of guessed
-from a screenshot: current bias, each frozen anchor (`origin low`, `peak high`, `origin high`,
-`trough low`) with price and bars-ago, the rolling swing high/low that feed BOS detection, the
-breaker count and whether the gate is open, per-timeframe gap counts, which of the six gap feeds
-are live, unswept/swept BSL-SSL counts, the last sweep (side, price, bars ago), SMT freshness on
-both engines, and the chart timeframe the `BB` labels derive from.
+**BSL / SSL.** 5m wick highs and lows only. Black line broken in the middle with `BSL` / `SSL`
+centred in the gap, tagged `BSL+VAH` / `SSL+POC` when it lines up with a Daily or Weekly profile
+level. On the sweep it becomes `$$$` and the line stops dead at the sweep candle. Swept rays clear
+10 minutes later; anything left dies on the day roll.
+
+**SMT.** Wick to wick between the two actual pivots, `SMT` centred on the line, solid or dotted.
+Two engines: HTF (15m source) and LTF (always the chart's own timeframe). Suppressed when the
+comparison symbol is already trading through its own last pivot.
+
+**Stops.** Wick first — swept wick plus buffer. If that stop is wider than 1.5 × 5m ATR it falls
+back to the wick of the LTF confirmation object (the 1m IFVG's or breaker's own wick). The
+checklist shows which one is in use.
+
+**Targets.** TP1 = the first real wick at or beyond 1R; TP2 and TP3 are the next real levels
+beyond that. Candidates are 5m swing wicks, session and intraday highs/lows, Daily/Weekly
+VAH-VAL-POC, and HTF gap CE lines — never a floating R-multiple unless nothing qualifies, and the
+checklist says `TPs unanchored` when that happens. TP4 is off by default (50/40/10 → 50/40/5/5).
+
+**Sizing.** `Auto (charted symbol)` uses `syminfo.pointvalue` so it works on stocks; otherwise
+MNQ / NQ / MES / ES, defaulting to **MNQ with $600 risk** so you can chart NQ and execute micros.
+Always rounds **down**, and shows `2-3` when the exact figure is close to the next contract.
+75% size below B+ (grade and percentage both configurable), 50% on Monday and Friday.
+
+**Gates.** 09:35–15:00 plus an Asia window 20:00–23:00, news blackouts (08:30 / 10:00 / 14:00
+built-in plus two custom slots), a 0–100 chop score, and minimum RR 2.0. Any gate failing = No Trade.
+
+**Continuation vs reversal** is classified and tracked separately in the stats table, alongside
+per-grade Full / 3TP / 2TP / 1TP / Loss buckets, binary win% (any profit = win) and average % of
+target captured.
+
+## Four calls I made because you didn't answer
+
+All four are settings, so change them without touching code:
+1. Stop fallback trigger — **ATR multiple** (`stopMaxAtr`, 1.5 × 5m ATR).
+2. Chop — **combined score** of ATR compression, body overlap and range containment (`chopThreshold`, 60).
+3. News — **built-in recurring plus two custom windows**.
+4. HTF gap filter — **distance + respected + first/last combined** (`htfDistAtr`, `htfNeedRespect`, `gapFirstLast`).
+
+## Known limits
+
+- **30s gaps only work on a 30s or lower chart.** Pine cannot get true sub-chart resolution from
+  `request.security`, so on a 1m chart the 30s feed reports itself unavailable rather than
+  returning fake data. The diagnostics panel shows this.
+- Box budget is the tight resource. If gaps or plans stop drawing, that is what ran out.
+- The CISD walk-back uses dynamic history indexing capped at 50 candles.
