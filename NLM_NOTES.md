@@ -99,6 +99,26 @@ All four are settings, so change them without touching code:
 3. News — **built-in recurring plus two custom windows**.
 4. HTF gap filter — **distance + respected + first/last combined** (`htfDistAtr`, `htfNeedRespect`, `gapFirstLast`).
 
+## Scroll drift — fixed
+
+Every drawing that extends past the last bar (gaps, breaker boxes, BSL/SSL rays, the whole trade
+plan) now anchors on `xloc.bar_index`, not `xloc.bar_time`. A future *timestamp* has no bar to
+sit on, so TradingView projects where it would land, and that projection shifts when you scroll
+or zoom — which is why the gaps slid around. A bar index is exact and cannot drift. The three-
+candle buffers now carry the chart bar index of each completed higher-timeframe candle, so a 4H
+gap still anchors to its real displacement candle rather than an estimate.
+
+Session levels, the Daily/Weekly profile lines and the SMT line stay on `bar_time`: the first two
+use `extend.right`, which TradingView resolves natively, and the SMT line runs between two past
+pivots, so none of them project into the future.
+
+## Entry label
+
+Prints on the entry bar as `Long (A+) - 3` (below the bar for longs, above for shorts). On
+resolution the outcome is appended and the text recolours: faded green if it closed beyond
+breakeven, **black if it reached TP1 and then gave it back at breakeven**, faded red on a
+straight loss.
+
 ## Known limits
 
 - **30s gaps only work on a 30s or lower chart.** Pine cannot get true sub-chart resolution from

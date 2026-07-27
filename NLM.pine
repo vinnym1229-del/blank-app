@@ -935,17 +935,20 @@ f_tfLabel(string tf) =>
         out := str.tostring(int(s / 86400)) + "D"
     out
 
-f_rightX(int bars) =>
-    time + math.max(1, bars) * chartMs
+// Anything that extends PAST the last bar is anchored on bar_index, never on a
+// future timestamp: TradingView has to project where a future time lands, and
+// that projection moves when the chart is scrolled or zoomed.
+f_rightBar(int bars) =>
+    bar_index + math.max(1, bars)
 
 string chartTfLabel = f_tfLabel(timeframe.period)
 
 // two line segments with a real gap, label centred exactly in the gap.
 // Every caller recomputes this each bar while the drawing is still growing.
 f_gapLine(line a, line b, label lb, float price, int x1, int x2, int gapBars, string txt) =>
-    int xr = na(x2) or x2 <= x1 ? x1 + chartMs : x2
+    int xr = na(x2) or x2 <= x1 ? x1 + 1 : x2
     int mid = int((x1 + xr) / 2)
-    int half = math.max(chartMs, int(gapBars * chartMs / 2))
+    int half = math.max(1, int(gapBars / 2))
     line.set_xy1(a, x1, price)
     line.set_xy2(a, math.max(x1, mid - half), price)
     line.set_xy1(b, math.min(xr, mid + half), price)
@@ -1211,10 +1214,11 @@ type Liq
     label  lb
     float  price
     bool   isHigh
-    int    startTime
+    int    startBar
     int    createdBar
     int    dayKey
     bool   swept
+    int    sweptBar
     int    sweptTime
     string tag
 
@@ -1225,8 +1229,8 @@ f_liqText(Liq q) =>
 
 f_layoutLiq(Liq q) =>
     // a swept ray never grows past the candle that took it
-    int x2 = q.swept ? q.sweptTime : f_rightX(liqExtendBars)
-    f_gapLine(q.lnA, q.lnB, q.lb, q.price, q.startTime, x2, liqLabelGap, f_liqText(q))
+    int x2 = q.swept ? q.sweptBar : f_rightBar(liqExtendBars)
+    f_gapLine(q.lnA, q.lnB, q.lb, q.price, q.startBar, x2, liqLabelGap, f_liqText(q))
     0
 
 f_delLiq(array<Liq> qs, int i) =>
@@ -1256,12 +1260,13 @@ f_liqExists(array<Liq> qs, float px, bool isHigh) =>
                 found := true
     found
 
-f_addLiq(array<Liq> qs, float px, bool isHigh, int anchorTime) =>
-    if showLiq and not na(px) and not na(anchorTime) and not f_nearSessionLevel(levels, px, liqDedupTicks) and not f_liqExists(qs, px, isHigh)
-        line a = line.new(anchorTime, px, anchorTime, px, xloc = xloc.bar_time, color = liqColor, style = line.style_solid, width = 1)
-        line b = line.new(anchorTime, px, anchorTime, px, xloc = xloc.bar_time, color = liqColor, style = line.style_solid, width = 1)
-        label l = label.new(anchorTime, px, isHigh ? "BSL" : "SSL", xloc = xloc.bar_time, style = label.style_none, color = color.new(color.black, 100), textcolor = liqColor, size = size.small, textalign = text.align_center)
-        Liq q = Liq.new(lnA = a, lnB = b, lb = l, price = px, isHigh = isHigh, startTime = anchorTime, createdBar = bar_index, dayKey = f_nyKey(anchorTime), swept = false, sweptTime = na, tag = f_vpTag(px))
+f_addLiq(array<Liq> qs, float px, bool isHigh, int anchorBar) =>
+    if showLiq and not na(px) and not na(anchorBar) and not f_nearSessionLevel(levels, px, liqDedupTicks) and not f_liqExists(qs, px, isHigh)
+        int ab = math.max(0, anchorBar)
+        line a = line.new(ab, px, ab, px, xloc = xloc.bar_index, color = liqColor, style = line.style_solid, width = 1)
+        line b = line.new(ab, px, ab, px, xloc = xloc.bar_index, color = liqColor, style = line.style_solid, width = 1)
+        label l = label.new(ab, px, isHigh ? "BSL" : "SSL", xloc = xloc.bar_index, style = label.style_none, color = color.new(color.black, 100), textcolor = liqColor, size = size.small, textalign = text.align_center)
+        Liq q = Liq.new(lnA = a, lnB = b, lb = l, price = px, isHigh = isHigh, startBar = ab, createdBar = bar_index, dayKey = f_nyKey(time), swept = false, sweptBar = na, sweptTime = na, tag = f_vpTag(px))
         array.push(qs, q)
         f_layoutLiq(q)
     0
@@ -1279,15 +1284,17 @@ bool liqTfIsChart = timeframe.in_seconds(liqPivotTf) == chartSeconds
 float liqPh = liqTfIsChart ? ta.pivothigh(high, liqSwingLen, liqSwingLen) : liqSecPh
 float liqPl = liqTfIsChart ? ta.pivotlow(low, liqSwingLen, liqSwingLen) : liqSecPl
 int   liqPt = liqTfIsChart ? time[liqSwingLen] : liqSecPt
+// how many CHART bars back the confirmed pivot sits
+int   liqPb = math.max(0, bar_index - int(math.round(liqSwingLen * math.max(1, timeframe.in_seconds(liqPivotTf)) / chartSeconds)))
 
 var int lastLiqPhTime = na
 var int lastLiqPlTime = na
 if showLiq and not na(liqPh) and not na(liqPt) and (na(lastLiqPhTime) or liqPt != lastLiqPhTime)
     lastLiqPhTime := liqPt
-    f_addLiq(liqs, liqPh, true, liqPt)
+    f_addLiq(liqs, liqPh, true, liqPb)
 if showLiq and not na(liqPl) and not na(liqPt) and (na(lastLiqPlTime) or liqPt != lastLiqPlTime)
     lastLiqPlTime := liqPt
-    f_addLiq(liqs, liqPl, false, liqPt)
+    f_addLiq(liqs, liqPl, false, liqPb)
 
 bool liqSweptThisBar = false
 bool newTradingDay = not na(time[1]) and f_nyKey(time) != f_nyKey(time[1])
@@ -1300,6 +1307,7 @@ if array.size(liqs) > 0
                 drop := true
             else if q.isHigh ? high >= q.price : low <= q.price
                 q.swept := true
+                q.sweptBar := bar_index
                 q.sweptTime := time
                 line.set_style(q.lnA, line.style_dashed)
                 line.set_style(q.lnB, line.style_dashed)
@@ -1361,6 +1369,7 @@ bearAccent     = input.color(#F23645, "Bearish accent", group = groupFvg)
 
 type Bar3
     array<int>   t
+    array<int>   bi
     array<float> o
     array<float> h
     array<float> l
@@ -1380,7 +1389,7 @@ type Gap
     bool   bull
     bool   inverted
     bool   bpr
-    int    leftTime
+    int    leftBar
     int    bornBar
     bool   touched
     bool   respected
@@ -1393,17 +1402,19 @@ var array<int> legId  = array.new_int(6, 0)
 var array<int> legIdx = array.new_int(6, 0)
 
 f_newBar3() =>
-    Bar3.new(t = array.new_int(), o = array.new_float(), h = array.new_float(), l = array.new_float(), c = array.new_float())
+    Bar3.new(t = array.new_int(), bi = array.new_int(), o = array.new_float(), h = array.new_float(), l = array.new_float(), c = array.new_float())
 
-f_pushBar(Bar3 b, int bt, float bo, float bh, float bl, float bc) =>
+f_pushBar(Bar3 b, int bt, int bidx, float bo, float bh, float bl, float bc) =>
     if not na(bt) and not na(bh) and not na(bl)
         array.unshift(b.t, bt)
+        array.unshift(b.bi, bidx)
         array.unshift(b.o, bo)
         array.unshift(b.h, bh)
         array.unshift(b.l, bl)
         array.unshift(b.c, bc)
         while array.size(b.t) > 3
             array.pop(b.t)
+            array.pop(b.bi)
             array.pop(b.o)
             array.pop(b.h)
             array.pop(b.l)
@@ -1434,11 +1445,11 @@ f_styleGap(Gap g) =>
     0
 
 f_layoutGap(Gap g) =>
-    int rx = f_rightX(gapExtendBars)
+    int rx = f_rightBar(gapExtendBars)
     float mid = (g.top + g.bot) / 2
-    box.set_lefttop(g.bx, g.leftTime, g.top)
+    box.set_lefttop(g.bx, g.leftBar, g.top)
     box.set_rightbottom(g.bx, rx, g.bot)
-    line.set_xy1(g.ce, g.leftTime, mid)
+    line.set_xy1(g.ce, g.leftBar, mid)
     line.set_xy2(g.ce, rx, mid)
     label.set_xy(g.lb, rx, mid)
     0
@@ -1498,13 +1509,13 @@ f_sameTier(int a, int b) =>
     bool hi = a >= 3 and b >= 3
     lo or mid or hi
 
-f_makeGap(float top, float bot, float wickHi, float wickLo, int leftTime, int tfSec, string tfName, int rank, bool bull, bool bpr, int lId, int lIdx) =>
-    int rx = f_rightX(gapExtendBars)
+f_makeGap(float top, float bot, float wickHi, float wickLo, int leftBar, int tfSec, string tfName, int rank, bool bull, bool bpr, int lId, int lIdx) =>
+    int rx = f_rightBar(gapExtendBars)
     float mid = (top + bot) / 2
-    box bx = box.new(leftTime, top, rx, bot, xloc = xloc.bar_time, border_color = color.black, border_width = 1)
-    line ce = line.new(leftTime, mid, rx, mid, xloc = xloc.bar_time, style = line.style_dashed, width = 1)
-    label lb = label.new(rx, mid, "", xloc = xloc.bar_time, style = label.style_label_right, color = color.new(color.black, 100), size = size.normal, textalign = text.align_right)
-    Gap g = Gap.new(bx = bx, ce = ce, lb = lb, top = top, bot = bot, wickHi = wickHi, wickLo = wickLo, tfSec = tfSec, tfName = tfName, rank = rank, bull = bull, inverted = false, bpr = bpr, leftTime = leftTime, bornBar = bar_index, touched = false, respected = false, legId = lId, legIdx = lIdx)
+    box bx = box.new(leftBar, top, rx, bot, xloc = xloc.bar_index, border_color = color.black, border_width = 1)
+    line ce = line.new(leftBar, mid, rx, mid, xloc = xloc.bar_index, style = line.style_dashed, width = 1)
+    label lb = label.new(rx, mid, "", xloc = xloc.bar_index, style = label.style_label_right, color = color.new(color.black, 100), size = size.normal, textalign = text.align_right)
+    Gap g = Gap.new(bx = bx, ce = ce, lb = lb, top = top, bot = bot, wickHi = wickHi, wickLo = wickLo, tfSec = tfSec, tfName = tfName, rank = rank, bull = bull, inverted = false, bpr = bpr, leftBar = leftBar, bornBar = bar_index, touched = false, respected = false, legId = lId, legIdx = lIdx)
     f_styleGap(g)
     g
 
@@ -1517,7 +1528,7 @@ f_detectGap(array<Gap> gs, Bar3 b, int tfSec, string tfName, int rank, bool allo
         float l2 = array.get(b.l, 1)
         float o2 = array.get(b.o, 1)
         float c2 = array.get(b.c, 1)
-        int   t2 = array.get(b.t, 1)
+        int   t2 = array.get(b.bi, 1)
         float h3 = array.get(b.h, 2)
         float l3 = array.get(b.l, 2)
         float rng2 = h2 - l2
@@ -1636,17 +1647,17 @@ int tfSec4 = timeframe.in_seconds(fvgTf4)
 int tfSec5 = timeframe.in_seconds(fvgTf5)
 
 if new0
-    f_pushBar(buf0, r0t[1], r0o[1], r0h[1], r0l[1], r0c[1])
+    f_pushBar(buf0, r0t[1], math.max(0, bar_index - 1), r0o[1], r0h[1], r0l[1], r0c[1])
 if new1
-    f_pushBar(buf1, r1t[1], r1o[1], r1h[1], r1l[1], r1c[1])
+    f_pushBar(buf1, r1t[1], math.max(0, bar_index - 1), r1o[1], r1h[1], r1l[1], r1c[1])
 if new2
-    f_pushBar(buf2, r2t[1], r2o[1], r2h[1], r2l[1], r2c[1])
+    f_pushBar(buf2, r2t[1], math.max(0, bar_index - 1), r2o[1], r2h[1], r2l[1], r2c[1])
 if new3
-    f_pushBar(buf3, r3t[1], r3o[1], r3h[1], r3l[1], r3c[1])
+    f_pushBar(buf3, r3t[1], math.max(0, bar_index - 1), r3o[1], r3h[1], r3l[1], r3c[1])
 if new4
-    f_pushBar(buf4, r4t[1], r4o[1], r4h[1], r4l[1], r4c[1])
+    f_pushBar(buf4, r4t[1], math.max(0, bar_index - 1), r4o[1], r4h[1], r4l[1], r4c[1])
 if new5
-    f_pushBar(buf5, r5t[1], r5o[1], r5h[1], r5l[1], r5c[1])
+    f_pushBar(buf5, r5t[1], math.max(0, bar_index - 1), r5o[1], r5h[1], r5l[1], r5c[1])
 
 // ---- inversion runs at each timeframe's own candle close, on the body
 int  gapFlips = 0
@@ -1773,7 +1784,7 @@ type Brk
     label lb
     float top
     float bot
-    int   leftTime
+    int   leftBar
     bool  bullBreaker
     float cisd
     bool  confirmAbove
@@ -1846,26 +1857,26 @@ f_delBrk(array<Brk> bs, int i) =>
     0
 
 f_layoutBrk(Brk b) =>
-    int rx = f_rightX(gapExtendBars)
+    int rx = f_rightBar(gapExtendBars)
     float mid = (b.top + b.bot) / 2
-    box.set_lefttop(b.bx, b.leftTime, b.top)
+    box.set_lefttop(b.bx, b.leftBar, b.top)
     box.set_rightbottom(b.bx, rx, b.bot)
-    line.set_xy1(b.mid, b.leftTime, mid)
+    line.set_xy1(b.mid, b.leftBar, mid)
     line.set_xy2(b.mid, rx, mid)
     label.set_xy(b.lb, rx, mid)
     if not na(b.cisdLn)
-        line.set_xy1(b.cisdLn, b.leftTime, b.cisd)
+        line.set_xy1(b.cisdLn, b.leftBar, b.cisd)
         line.set_xy2(b.cisdLn, b.confirmed ? line.get_x2(b.cisdLn) : rx, b.cisd)
     0
 
-f_addBrk(array<Brk> bs, float top, float bot, int leftTime, bool bullBreaker, float cisd, bool confirmAbove) =>
-    int rx = f_rightX(gapExtendBars)
+f_addBrk(array<Brk> bs, float top, float bot, int leftBar, bool bullBreaker, float cisd, bool confirmAbove) =>
+    int rx = f_rightBar(gapExtendBars)
     float mid = (top + bot) / 2
-    box bx = box.new(leftTime, top, rx, bot, xloc = xloc.bar_time, border_color = color.new(color.black, math.max(0, bbTransp - 35)), border_width = 1, bgcolor = color.new(bbFill, bbTransp))
-    line ml = line.new(leftTime, mid, rx, mid, xloc = xloc.bar_time, color = color.new(color.black, 0), style = line.style_dashed, width = 1)
-    line cl = bbShowCisd ? line.new(leftTime, cisd, rx, cisd, xloc = xloc.bar_time, color = color.new(#FFB300, 0), style = line.style_dotted, width = 1) : na
-    label lb = label.new(rx, mid, chartTfLabel + " BB", xloc = xloc.bar_time, style = label.style_label_right, color = color.new(color.black, 100), textcolor = color.new(color.black, 0), size = size.normal, textalign = text.align_right)
-    array.push(bs, Brk.new(bx = bx, mid = ml, cisdLn = cl, lb = lb, top = top, bot = bot, leftTime = leftTime, bullBreaker = bullBreaker, cisd = cisd, confirmAbove = confirmAbove, confirmed = false, bornBar = bar_index, confirmedBar = na))
+    box bx = box.new(leftBar, top, rx, bot, xloc = xloc.bar_index, border_color = color.new(color.black, math.max(0, bbTransp - 35)), border_width = 1, bgcolor = color.new(bbFill, bbTransp))
+    line ml = line.new(leftBar, mid, rx, mid, xloc = xloc.bar_index, color = color.new(color.black, 0), style = line.style_dashed, width = 1)
+    line cl = bbShowCisd ? line.new(leftBar, cisd, rx, cisd, xloc = xloc.bar_index, color = color.new(#FFB300, 0), style = line.style_dotted, width = 1) : na
+    label lb = label.new(rx, mid, chartTfLabel + " BB", xloc = xloc.bar_index, style = label.style_label_right, color = color.new(color.black, 100), textcolor = color.new(color.black, 0), size = size.normal, textalign = text.align_right)
+    array.push(bs, Brk.new(bx = bx, mid = ml, cisdLn = cl, lb = lb, top = top, bot = bot, leftBar = leftBar, bullBreaker = bullBreaker, cisd = cisd, confirmAbove = confirmAbove, confirmed = false, bornBar = bar_index, confirmedBar = na))
     while array.size(bs) > bbMaxBoxes
         f_delBrk(bs, 0)
     0
@@ -1881,7 +1892,7 @@ bool chochUp   = bbBias == "Bearish" and not na(legOriginHigh) and close > legOr
 
 if chochDown
     if showBB and not na(legPeakHighBody) and not na(legOriginLowBody)
-        f_addBrk(brks, math.max(legPeakHighBody, legOriginLowBody), math.min(legPeakHighBody, legOriginLowBody), math.min(legOriginLowTime, legPeakHighTime), false, f_cisdLevel(true, bbCisdLook), true)
+        f_addBrk(brks, math.max(legPeakHighBody, legOriginLowBody), math.min(legPeakHighBody, legOriginLowBody), math.min(legOriginLowBar, legPeakHighBar), false, f_cisdLevel(true, bbCisdLook), true)
         lastBrkBar := bar_index
         lastBrkBull := false
     bbBias := "None"
@@ -1892,7 +1903,7 @@ if chochDown
 
 if chochUp
     if showBB and not na(legTroughLowBody) and not na(legOriginHighBody)
-        f_addBrk(brks, math.max(legTroughLowBody, legOriginHighBody), math.min(legTroughLowBody, legOriginHighBody), math.min(legOriginHighTime, legTroughLowTime), true, f_cisdLevel(false, bbCisdLook), false)
+        f_addBrk(brks, math.max(legTroughLowBody, legOriginHighBody), math.min(legTroughLowBody, legOriginHighBody), math.min(legOriginHighBar, legTroughLowBar), true, f_cisdLevel(false, bbCisdLook), false)
         lastBrkBar := bar_index
         lastBrkBull := true
     bbBias := "None"
@@ -1935,7 +1946,7 @@ if array.size(brks) > 0
                 array.set(brks, i, b)
                 box.set_border_width(b.bx, 2)
                 if not na(b.cisdLn)
-                    line.set_xy2(b.cisdLn, time, b.cisd)
+                    line.set_xy2(b.cisdLn, bar_index, b.cisd)
                 lastBrkConfirmedBar := bar_index
                 lastBrkConfirmedBull := b.bullBreaker
         if drop
@@ -2320,6 +2331,7 @@ type Trade
     int    startTime
     int    startBar
     int    endTime
+    int    endBar
     bool   active
     int    hits
     string grade
@@ -2381,9 +2393,9 @@ f_newTrade(bool isLong, float entry, float stop, float p1, float p2, float p3, f
         float p = array.get(px, k)
         bool draw = k < n and not na(p)
         float py = draw ? p : entry
-        line a = line.new(time, py, time, py, xloc = xloc.bar_time, color = planLineColor, style = line.style_solid, width = 1)
-        line b = line.new(time, py, time, py, xloc = xloc.bar_time, color = planLineColor, style = line.style_solid, width = 1)
-        label l = label.new(time, py, "", xloc = xloc.bar_time, style = label.style_none, color = color.new(color.black, 100), textcolor = planLineColor, size = size.small, textalign = text.align_center)
+        line a = line.new(bar_index, py, bar_index, py, xloc = xloc.bar_index, color = planLineColor, style = line.style_solid, width = 1)
+        line b = line.new(bar_index, py, bar_index, py, xloc = xloc.bar_index, color = planLineColor, style = line.style_solid, width = 1)
+        label l = label.new(bar_index, py, "", xloc = xloc.bar_index, style = label.style_none, color = color.new(color.black, 100), textcolor = planLineColor, size = size.small, textalign = text.align_center)
         array.push(la, a)
         array.push(lb, b)
         array.push(lbl, l)
@@ -2391,22 +2403,22 @@ f_newTrade(bool isLong, float entry, float stop, float p1, float p2, float p3, f
         if k >= 2
             array.push(hits, false)
     float far = na(p4) or not useTp4 ? p3 : p4
-    int rx = f_rightX(planExtendBars)
-    box bu = box.new(time, isLong ? far : stop, rx, entry, xloc = xloc.bar_time, border_color = color.new(zoneProfit, 70), bgcolor = color.new(zoneProfit, zoneTransp))
-    box bl = box.new(time, entry, rx, isLong ? stop : far, xloc = xloc.bar_time, border_color = color.new(zoneRisk, 70), bgcolor = color.new(zoneRisk, zoneTransp))
-    label le = label.new(time, isLong ? low : high, (isLong ? "Long " : "Short ") + grade + " - " + str.tostring(contracts), xloc = xloc.bar_time, style = isLong ? label.style_label_up : label.style_label_down, color = color.new(color.black, 100), textcolor = color.black, size = size.normal)
-    Trade.new(isLong = isLong, entry = entry, stop = stop, px = px, lnA = la, lnB = lb, lbs = lbl, lnEnd = ends, tpHit = hits, bxUpper = bu, bxLower = bl, lbEntry = le, startTime = time, startBar = bar_index, endTime = na, active = true, hits = 0, grade = grade, setup = setup, contracts = contracts, beMoved = false, counted = false, riskGone = false)
+    int rx = f_rightBar(planExtendBars)
+    box bu = box.new(bar_index, isLong ? far : stop, rx, entry, xloc = xloc.bar_index, border_color = color.new(zoneProfit, 70), bgcolor = color.new(zoneProfit, zoneTransp))
+    box bl = box.new(bar_index, entry, rx, isLong ? stop : far, xloc = xloc.bar_index, border_color = color.new(zoneRisk, 70), bgcolor = color.new(zoneRisk, zoneTransp))
+    label le = label.new(bar_index, isLong ? low : high, (isLong ? "Long (" : "Short (") + grade + ") - " + str.tostring(contracts), xloc = xloc.bar_index, style = isLong ? label.style_label_up : label.style_label_down, color = color.new(color.black, 100), textcolor = color.black, size = size.normal)
+    Trade.new(isLong = isLong, entry = entry, stop = stop, px = px, lnA = la, lnB = lb, lbs = lbl, lnEnd = ends, tpHit = hits, bxUpper = bu, bxLower = bl, lbEntry = le, startTime = time, startBar = bar_index, endTime = na, endBar = na, active = true, hits = 0, grade = grade, setup = setup, contracts = contracts, beMoved = false, counted = false, riskGone = false)
 
 f_layoutTrade(Trade t) =>
-    int rx = f_rightX(planExtendBars)
+    int rx = f_rightBar(planExtendBars)
     int n = useTp4 ? 6 : 5
     for k = 0 to 5
         float p = array.get(t.px, k)
         if k < n and not na(p)
             int e = array.get(t.lnEnd, k)
-            int x2 = na(e) ? (t.active ? rx : t.endTime) : e
-            f_gapLine(array.get(t.lnA, k), array.get(t.lnB, k), array.get(t.lbs, k), k == 1 ? t.stop : p, t.startTime, x2, planLabelGap, f_planName(k, t.beMoved))
-    int bx2 = t.active ? rx : t.endTime
+            int x2 = na(e) ? (t.active ? rx : t.endBar) : e
+            f_gapLine(array.get(t.lnA, k), array.get(t.lnB, k), array.get(t.lbs, k), k == 1 ? t.stop : p, t.startBar, x2, planLabelGap, f_planName(k, t.beMoved))
+    int bx2 = t.active ? rx : t.endBar
     if not (t.riskGone and not t.isLong)
         box.set_right(t.bxUpper, bx2)
     if not (t.riskGone and t.isLong)
@@ -2422,7 +2434,7 @@ f_updateTrade(Trade t) =>
                 float lvl = array.get(t.px, k + 2)
                 if not na(lvl) and (t.isLong ? high >= lvl : low <= lvl)
                     array.set(t.tpHit, k, true)
-                    array.set(t.lnEnd, k + 2, time)
+                    array.set(t.lnEnd, k + 2, bar_index)
                     t.hits := k + 1
                     if k == 0
                         t.stop := t.entry
@@ -2436,12 +2448,15 @@ f_updateTrade(Trade t) =>
         if t.hits >= n or stopped
             t.active := false
             t.endTime := time
+            t.endBar := bar_index
             if array.size(t.lnEnd) > 0
                 for k = 0 to 5
                     if na(array.get(t.lnEnd, k))
-                        array.set(t.lnEnd, k, time)
-            label.set_text(t.lbEntry, (t.isLong ? "Long " : "Short ") + t.grade + " - " + str.tostring(t.contracts) + " - " + f_outcome(t.hits, t.hits >= 1))
-            label.set_textcolor(t.lbEntry, t.hits >= 1 ? color.new(#089981, 0) : color.new(#F23645, 0))
+                        array.set(t.lnEnd, k, bar_index)
+            label.set_text(t.lbEntry, (t.isLong ? "Long (" : "Short (") + t.grade + ") - " + str.tostring(t.contracts) + " - " + f_outcome(t.hits, t.hits >= 1))
+            // faded green if it closed beyond breakeven, black if it gave TP1 back
+            // at breakeven, faded red on a straight loss
+            label.set_textcolor(t.lbEntry, t.hits == 0 ? color.new(#F23645, 25) : t.hits == 1 ? color.new(color.black, 0) : color.new(#089981, 25))
     t.active
 
 f_capPct(Trade t) =>
