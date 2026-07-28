@@ -1,11 +1,11 @@
 //@version=6
-indicator("NLM", shorttitle = "NLM", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 500, max_bars_back = 5000)
+indicator("NLM", shorttitle = "NLM", overlay = true, max_lines_count = 500, max_labels_count = 500, max_boxes_count = 500, max_bars_back = 500)
 
 groupSessions = "Sessions"
 sessionTimezone = input.string("America/New_York", "Session timezone", group = groupSessions, display = display.none)
 sessionDays = input.string("1234567", "Active days", options = ["1234567", "23456"], group = groupSessions, display = display.none)
 calcTimeframe = input.timeframe("1", "Stable calculation timeframe", group = groupSessions, display = display.none)
-lowerTfBarsRequested = input.int(20000, "Lower-TF bars requested", minval = 1000, maxval = 200000, group = groupSessions, display = display.none)
+lowerTfBarsRequested = input.int(10000, "Lower-TF bars requested", minval = 1000, maxval = 200000, group = groupSessions, display = display.none)
 dailyResetHour = input.int(18, "NY reset hour", minval = 0, maxval = 23, group = groupSessions, display = display.none)
 
 showPdLevels = input.bool(true, "Show PDH/PDL", group = groupSessions, display = display.none)
@@ -33,7 +33,7 @@ useProfileConfluence = input.bool(true, "Tag H/L with POC/VAH/VAL", group = grou
 profileRows = input.int(24, "Profile rows", minval = 12, maxval = 100, group = groupProfile, display = display.none)
 valueAreaPct = input.int(70, "Value area %", minval = 50, maxval = 99, group = groupProfile, display = display.none)
 profileToleranceTicks = input.int(8, "Confluence tolerance, ticks", minval = 1, maxval = 200, group = groupProfile, display = display.none)
-maxProfileBars = input.int(10000, "Max bars in profile", minval = 100, maxval = 20000, group = groupProfile, display = display.none)
+maxProfileBars = input.int(5000, "Max bars in profile", minval = 100, maxval = 20000, group = groupProfile, display = display.none)
 showVolumeProfileBars = input.bool(false, "Show volume profile bars", group = groupProfile, display = display.none)
 stretchProfileAcrossRange = input.bool(true, "Stretch profile across range", group = groupProfile, display = display.none)
 profileBarOffsetBars = input.int(0, "Profile bar offset", minval = 0, maxval = 50, group = groupProfile, display = display.none)
@@ -1177,7 +1177,7 @@ liqDedupTicks  = input.int(10, "Dedup vs session levels (ticks)", minval = 1, ma
 liqExtendBars  = input.int(20, "Ray right extension (bars)", minval = 2, maxval = 200, group = groupLiq)
 liqLabelGap    = input.int(6, "Label gap width (bars)", minval = 2, maxval = 60, group = groupLiq)
 liqSweptMins   = input.int(10, "Remove swept $$$ after (minutes)", minval = 1, maxval = 240, group = groupLiq)
-liqMaxUnswept  = input.int(12, "Max unswept rays", minval = 1, maxval = 60, group = groupLiq)
+liqMaxUnswept  = input.int(10, "Max unswept rays", minval = 1, maxval = 60, group = groupLiq)
 liqColor       = input.color(color.black, "Ray color", group = groupLiq)
 
 f_pivFeed(simple string sym, simple string tf, simple int len) =>
@@ -1380,7 +1380,7 @@ fvgBodyPct     = input.float(50.0, "Displacement body % of range", minval = 10, 
 gapExtendBars  = input.int(20, "Extend gaps this many bars past price", minval = 2, maxval = 100, group = groupFvg)
 gapMergeTicks  = input.int(8, "Treat gaps within N ticks as the same gap", minval = 1, maxval = 100, group = groupFvg)
 gapFirstLast   = input.bool(true, "Keep only the first and last gap of each leg", group = groupFvg, tooltip = "Respected and inverted gaps are always kept regardless.")
-maxTotalGaps   = input.int(24, "Max gaps on the chart (all timeframes)", minval = 4, maxval = 80, group = groupFvg, tooltip = "Hard ceiling so the drawing budget cannot overrun. The lowest-timeframe, oldest gap is dropped first.")
+maxTotalGaps   = input.int(18, "Max gaps on the chart (all timeframes)", minval = 4, maxval = 80, group = groupFvg, tooltip = "Hard ceiling so the drawing budget cannot overrun. The lowest-timeframe, oldest gap is dropped first.")
 gapPruneAll    = input.bool(false, "Prune overlaps across every timeframe", group = groupFvg, tooltip = "Off: a higher timeframe only removes an overlapping gap inside the same tier (30s vs 1m, 5m vs 15m, 15m/1H/4H). This keeps the 1m gap that sits inside a 5m gap, which the confirmation leg of the model depends on.")
 htfDistAtr     = input.float(25, "HTF gap max distance (x 5m ATR)", minval = 2, maxval = 200, group = groupFvg)
 htfNeedRespect = input.bool(false, "HTF gaps must already be respected", group = groupFvg)
@@ -1834,7 +1834,7 @@ if doLayout and array.size(gaps) > 0
 groupBB = "Breaker blocks"
 showBB        = input.bool(true, "Show breaker blocks", group = groupBB)
 bbSwingLen    = input.int(15, "Swing length for BOS / CHoCH", minval = 4, maxval = 60, group = groupBB)
-bbMaxBoxes    = input.int(6, "Max breaker boxes", minval = 1, maxval = 20, group = groupBB)
+bbMaxBoxes    = input.int(4, "Max breaker boxes", minval = 1, maxval = 20, group = groupBB)
 bbMaxWidth    = input.int(120, "Max breaker width (bars)", minval = 20, maxval = 600, group = groupBB, tooltip = "The leg between two swings can be hundreds of bars on a fast chart. The box price range is still the full swing-low body to swing-high body; only how far LEFT it is drawn is capped.")
 bbShowCisd    = input.bool(true, "Draw the CISD line until confirmed", group = groupBB)
 bbFill        = input.color(#B2B5BE, "Breaker fill (light grey)", group = groupBB)
@@ -2199,12 +2199,16 @@ var array<float> tpHiPool = array.new_float()
 var array<float> tpLoPool = array.new_float()
 if not na(liqPh)
     array.push(tpHiPool, liqPh)
-    while array.size(tpHiPool) > 40
-        array.shift(tpHiPool)
+if not na(chLtfPh)
+    array.push(tpHiPool, chLtfPh)
+while array.size(tpHiPool) > 60
+    array.shift(tpHiPool)
 if not na(liqPl)
     array.push(tpLoPool, liqPl)
-    while array.size(tpLoPool) > 40
-        array.shift(tpLoPool)
+if not na(chLtfPl)
+    array.push(tpLoPool, chLtfPl)
+while array.size(tpLoPool) > 60
+    array.shift(tpLoPool)
 
 f_bestAnchor(float best, float cand, float from, bool up) =>
     float out = best
@@ -2393,7 +2397,7 @@ tp4Alloc       = input.float(5, "TP4 allocation %", minval = 0, maxval = 100, gr
 planExtendBars = input.int(25, "Plan right extension (bars)", minval = 2, maxval = 200, group = groupPlan)
 planLabelGap   = input.int(8, "Plan label gap (bars)", minval = 2, maxval = 40, group = groupPlan)
 planCooldown   = input.int(10, "Bars between trades", minval = 0, maxval = 500, group = groupPlan)
-planMaxKept    = input.int(3, "Plans kept on chart", minval = 1, maxval = 10, group = groupPlan)
+planMaxKept    = input.int(2, "Plans kept on chart", minval = 1, maxval = 10, group = groupPlan)
 planLineColor  = input.color(color.black, "Plan line color", group = groupPlan)
 zoneProfit     = input.color(#787B86, "Upper zone", group = groupPlan)
 zoneRisk       = input.color(#F23645, "Lower zone", group = groupPlan)

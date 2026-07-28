@@ -99,6 +99,29 @@ All four are settings, so change them without touching code:
 3. News — **built-in recurring plus two custom windows**.
 4. HTF gap filter — **distance + respected + first/last combined** (`htfDistAtr`, `htfNeedRespect`, `gapFirstLast`).
 
+## "Works for a few seconds then goes away" — the memory/time limit
+
+That symptom is not a compile error. The script compiles, starts drawing, and is then killed by
+TradingView's runtime limit. The cause was `max_bars_back = 5000` in the `indicator()` call:
+that forces Pine to allocate a **5000-bar history buffer for every series variable in the
+script**, and this script has hundreds of them.
+
+It was set to 5000 when the CISD walk-back indexed series with runtime offsets. That code is
+gone, so the deepest lookback anything now needs is `chopAtrRef` at its 300 maximum plus the ATR
+window — about 320 bars, and only 64 at default settings. `max_bars_back` is now **500**, a 10x
+cut in allocated history, with a check that verifies it still covers the deepest possible
+lookback.
+
+Three other allocations came down with it: the lower-timeframe request 20000 to 10000 chart bars,
+the profile sample cap 10000 to 5000, and the live drawing budget (gaps 24 to 18, unswept rays 12
+to 10, breakers 6 to 4, retained plans 3 to 2). Every drawing is retained memory.
+
+## TP1 / TP2 placement
+
+The anchor pool only held **5m** pivot wicks. The wicks you circled are **1m** swings, which is
+why the targets missed them. The chart's own swing wicks now feed the pool alongside the 5m ones,
+so a target can land on the 1m wick that price actually respected.
+
 ## The 1m runtime error
 
 You did not send the message text, so this is elimination rather than diagnosis. The single
