@@ -5,7 +5,7 @@ groupSessions = "Sessions"
 sessionTimezone = input.string("America/New_York", "Session timezone", group = groupSessions, display = display.none)
 sessionDays = input.string("1234567", "Active days", options = ["1234567", "23456"], group = groupSessions, display = display.none)
 calcTimeframe = input.timeframe("1", "Stable calculation timeframe", group = groupSessions, display = display.none)
-lowerTfBarsRequested = input.int(100000, "Lower-TF bars requested", minval = 1000, maxval = 200000, group = groupSessions, display = display.none)
+lowerTfBarsRequested = input.int(20000, "Lower-TF bars requested", minval = 1000, maxval = 200000, group = groupSessions, display = display.none)
 dailyResetHour = input.int(18, "NY reset hour", minval = 0, maxval = 23, group = groupSessions, display = display.none)
 
 showPdLevels = input.bool(true, "Show PDH/PDL", group = groupSessions, display = display.none)
@@ -182,6 +182,12 @@ f_nyKey(int t) =>
 
 f_labelX() =>
     time + labelOffsetBars * chartMs
+
+// Label anchor in BAR INDEX space. A future timestamp has no bar to sit on, so
+// TradingView projects it, and the projection moves with the visible bar
+// spacing whenever the chart is scrolled or zoomed. A bar index cannot drift.
+f_labelXi() =>
+    bar_index + labelOffsetBars
 
 f_lineRightX(int startTime) =>
     int baseRight = time + labelOffsetBars * chartMs
@@ -496,7 +502,7 @@ f_addLevel(string name, float price, bool isHigh, color baseColor, color textCol
         line ln = line.new(x1, price, f_lineRightX(x1), price, xloc = xloc.bar_time, extend = extend.right, color = baseColor, style = line.style_solid, width = width)
         label lb = na
         if showLabels
-            lb := label.new(f_labelX(), price, f_levelText(name, price, false, confluence, dateText), xloc = xloc.bar_time, style = label.style_label_left, color = color.new(baseColor, 0), textcolor = textColor, size = size.small, textalign = text.align_left)
+            lb := label.new(f_labelXi(), price, f_levelText(name, price, false, confluence, dateText), xloc = xloc.bar_index, style = label.style_label_left, color = color.new(baseColor, 0), textcolor = textColor, size = size.small, textalign = text.align_left)
         array.push(levels, Level.new(ln, lb, price, isHigh, false, dayKey, name, baseColor, textColor, confluence, keepIfUnswept, dateText))
     0
 
@@ -527,7 +533,7 @@ f_addProfileLine(string name, float price, color lineColor, int profileId, int s
         if showLabels and drawLabel
             color txtColor = name == "POC" ? color.white : color.black
             int labelFade = isLatest ? 0 : math.min(90, historicalProfileLevelTransparency + 10)
-            lb := label.new(f_labelX(), price, f_profileText(name, price), xloc = xloc.bar_time, style = label.style_label_left, color = color.new(lineColor, labelFade), textcolor = txtColor, size = size.small, textalign = text.align_left)
+            lb := label.new(f_labelXi(), price, f_profileText(name, price), xloc = xloc.bar_index, style = label.style_label_left, color = color.new(lineColor, labelFade), textcolor = txtColor, size = size.small, textalign = text.align_left)
         array.push(profileDrawings, ProfileDrawing.new(ln, lb, profileId, name, price, lineColor))
     0
 
@@ -592,19 +598,19 @@ f_updateLabels() =>
             for i = 0 to array.size(levels) - 1
                 Level lvl = array.get(levels, i)
                 if not na(lvl.lb)
-                    label.set_x(lvl.lb, f_labelX())
+                    label.set_x(lvl.lb, f_labelXi())
                     label.set_textalign(lvl.lb, text.align_left)
         if array.size(profileDrawings) > 0
             for i = 0 to array.size(profileDrawings) - 1
                 ProfileDrawing drawing = array.get(profileDrawings, i)
                 if not na(drawing.lb)
-                    label.set_x(drawing.lb, f_labelX())
+                    label.set_x(drawing.lb, f_labelXi())
                     label.set_textalign(drawing.lb, text.align_left)
         if not na(intradayHighLabel)
-            label.set_x(intradayHighLabel, f_labelX())
+            label.set_x(intradayHighLabel, f_labelXi())
             label.set_textalign(intradayHighLabel, text.align_left)
         if not na(intradayLowLabel)
-            label.set_x(intradayLowLabel, f_labelX())
+            label.set_x(intradayLowLabel, f_labelXi())
             label.set_textalign(intradayLowLabel, text.align_left)
     0
 
@@ -765,8 +771,8 @@ if ltfCount > 0
                 intradayHighLine := line.new(intradayHighTime, intradayHigh, f_lineRightX(intradayHighTime), intradayHigh, xloc = xloc.bar_time, extend = extend.right, color = intradayColor, style = line.style_solid, width = lineWidth)
                 intradayLowLine := line.new(intradayLowTime, intradayLow, f_lineRightX(intradayLowTime), intradayLow, xloc = xloc.bar_time, extend = extend.right, color = intradayColor, style = line.style_solid, width = lineWidth)
                 if showLabels
-                    intradayHighLabel := label.new(f_labelX(), intradayHigh, f_liveText("IDH", intradayHigh), xloc = xloc.bar_time, style = label.style_label_left, color = color.new(intradayColor, 0), textcolor = color.black, size = size.small, textalign = text.align_left)
-                    intradayLowLabel := label.new(f_labelX(), intradayLow, f_liveText("IDL", intradayLow), xloc = xloc.bar_time, style = label.style_label_left, color = color.new(intradayColor, 0), textcolor = color.black, size = size.small, textalign = text.align_left)
+                    intradayHighLabel := label.new(f_labelXi(), intradayHigh, f_liveText("IDH", intradayHigh), xloc = xloc.bar_index, style = label.style_label_left, color = color.new(intradayColor, 0), textcolor = color.black, size = size.small, textalign = text.align_left)
+                    intradayLowLabel := label.new(f_labelXi(), intradayLow, f_liveText("IDL", intradayLow), xloc = xloc.bar_index, style = label.style_label_left, color = color.new(intradayColor, 0), textcolor = color.black, size = size.small, textalign = text.align_left)
 
         if inNewYork
             if na(nySessionHigh) or h > nySessionHigh
@@ -792,13 +798,13 @@ if ltfCount > 0
                 line.set_xy2(intradayLowLine, f_lineRightX(intradayLowTime), intradayLow)
                 if showLabels
                     if na(intradayHighLabel)
-                        intradayHighLabel := label.new(f_labelX(), intradayHigh, f_liveText("IDH", intradayHigh), xloc = xloc.bar_time, style = label.style_label_left, color = color.new(intradayColor, 0), textcolor = color.black, size = size.small, textalign = text.align_left)
+                        intradayHighLabel := label.new(f_labelXi(), intradayHigh, f_liveText("IDH", intradayHigh), xloc = xloc.bar_index, style = label.style_label_left, color = color.new(intradayColor, 0), textcolor = color.black, size = size.small, textalign = text.align_left)
                     if na(intradayLowLabel)
-                        intradayLowLabel := label.new(f_labelX(), intradayLow, f_liveText("IDL", intradayLow), xloc = xloc.bar_time, style = label.style_label_left, color = color.new(intradayColor, 0), textcolor = color.black, size = size.small, textalign = text.align_left)
-                    label.set_x(intradayHighLabel, f_labelX())
+                        intradayLowLabel := label.new(f_labelXi(), intradayLow, f_liveText("IDL", intradayLow), xloc = xloc.bar_index, style = label.style_label_left, color = color.new(intradayColor, 0), textcolor = color.black, size = size.small, textalign = text.align_left)
+                    label.set_x(intradayHighLabel, f_labelXi())
                     label.set_y(intradayHighLabel, intradayHigh)
                     label.set_text(intradayHighLabel, f_liveText("IDH", intradayHigh))
-                    label.set_x(intradayLowLabel, f_labelX())
+                    label.set_x(intradayLowLabel, f_labelXi())
                     label.set_y(intradayLowLabel, intradayLow)
                     label.set_text(intradayLowLabel, f_liveText("IDL", intradayLow))
 
@@ -943,6 +949,10 @@ f_rightBar(int bars) =>
 
 string chartTfLabel = f_tfLabel(timeframe.period)
 
+// Drawings persist across bars, so only the LAST bar's layout is ever visible.
+// Repositioning on every historical bar is pure wasted runtime.
+bool doLayout = barstate.islast
+
 // two line segments with a real gap, label centred exactly in the gap.
 // Every caller recomputes this each bar while the drawing is still growing.
 f_gapLine(line a, line b, label lb, float price, int x1, int x2, int gapBars, string txt) =>
@@ -1053,7 +1063,7 @@ f_drawVp(array<line> lns, array<label> lbs, string name, float price, color col,
     if not na(price)
         int x1 = na(startTime) ? time : startTime
         line ln = line.new(x1, price, f_lineRightX(x1), price, xloc = xloc.bar_time, extend = extend.right, color = col, style = line.style_dashed, width = 1)
-        label lb = label.new(f_labelX(), price, showPricesInLabels ? name + " " + f_priceText(price) : name, xloc = xloc.bar_time, style = label.style_label_left, color = color.new(col, 0), textcolor = color.black, size = size.small, textalign = text.align_left)
+        label lb = label.new(f_labelXi(), price, showPricesInLabels ? name + " " + f_priceText(price) : name, xloc = xloc.bar_index, style = label.style_label_left, color = color.new(col, 0), textcolor = color.black, size = size.small, textalign = text.align_left)
         array.push(lns, ln)
         array.push(lbs, lb)
     0
@@ -1125,7 +1135,7 @@ if vpRolled
     f_redrawVp(vpLines, vpLabels)
 if barstate.islast and array.size(vpLabels) > 0
     for i = 0 to array.size(vpLabels) - 1
-        label.set_x(array.get(vpLabels, i), f_labelX())
+        label.set_x(array.get(vpLabels, i), f_labelXi())
 
 // tag helper used by BSL/SSL: "BSL+VAH", "SSL+POC" ...
 f_vpTag(float px) =>
@@ -1189,11 +1199,12 @@ f_swAdd(array<float> ps, array<bool> hs, array<bool> ds, float px, bool isHigh) 
             array.shift(ds)
     0
 
-if array.size(levels) > 0
+var int levelsCountPrev = 0
+bool levelsChanged = array.size(levels) != levelsCountPrev
+if levelsChanged and array.size(levels) > 0
     for i = 0 to array.size(levels) - 1
         f_swAdd(swPrice, swIsHigh, swDone, array.get(levels, i).price, array.get(levels, i).isHigh)
-f_swAdd(swPrice, swIsHigh, swDone, intradayHigh, true)
-f_swAdd(swPrice, swIsHigh, swDone, intradayLow, false)
+levelsCountPrev := array.size(levels)
 
 if array.size(swPrice) > 0
     for i = 0 to array.size(swPrice) - 1
@@ -1303,7 +1314,7 @@ if array.size(liqs) > 0
         Liq q = array.get(liqs, i)
         bool drop = false
         if not q.swept
-            if f_nearSessionLevel(levels, q.price, liqDedupTicks)
+            if levelsChanged and f_nearSessionLevel(levels, q.price, liqDedupTicks)
                 drop := true
             else if q.isHigh ? high >= q.price : low <= q.price
                 q.swept := true
@@ -1322,7 +1333,7 @@ if array.size(liqs) > 0
                 drop := true
         if drop
             f_delLiq(liqs, i)
-        else
+        else if doLayout
             f_layoutLiq(array.get(liqs, i))
 
 int liqGuard = 0
@@ -1397,6 +1408,7 @@ type Gap
     int    legIdx
 
 var array<Gap> gaps = array.new<Gap>()
+var int gapCountPrev = 0
 var array<int> legDir = array.new_int(6, 0)
 var array<int> legId  = array.new_int(6, 0)
 var array<int> legIdx = array.new_int(6, 0)
@@ -1605,6 +1617,10 @@ f_invertTf(array<Gap> gs, int tfSec, float tfClose) =>
 f_feed(simple string tf) =>
     request.security(syminfo.tickerid, tf, [time, open, high, low, close], lookahead = barmerge.lookahead_off)
 
+// MTF-a doubles as the ATR reference timeframe so this costs no extra request
+f_feedAtr(simple string tf) =>
+    request.security(syminfo.tickerid, tf, [time, open, high, low, close, ta.atr(14)], lookahead = barmerge.lookahead_off)
+
 f_resolve(simple string tf, int st, float so, float sh, float sl, float sc) =>
     int  tfs = timeframe.in_seconds(tf)
     bool nat = tfs == chartSeconds
@@ -1613,7 +1629,7 @@ f_resolve(simple string tf, int st, float so, float sh, float sl, float sc) =>
 
 [q0t, q0o, q0h, q0l, q0c] = f_feed(fvgTf0)
 [q1t, q1o, q1h, q1l, q1c] = f_feed(fvgTf1)
-[q2t, q2o, q2h, q2l, q2c] = f_feed(fvgTf2)
+[q2t, q2o, q2h, q2l, q2c, atr5ref] = f_feedAtr(fvgTf2)
 [q3t, q3o, q3h, q3l, q3c] = f_feed(fvgTf3)
 [q4t, q4o, q4h, q4l, q4c] = f_feed(fvgTf4)
 [q5t, q5o, q5h, q5l, q5c] = f_feed(fvgTf5)
@@ -1725,29 +1741,20 @@ if showFvg
     if new0
         f_detectGap(gaps, buf0, tfSec0, f_tfLabel(fvgTf0), 0, ok0 and sweepFresh30 and f_countGapsTf(gaps, tfSec1) == 0, legDir, legId, legIdx)
 
-float atr5ref = request.security(syminfo.tickerid, "5", ta.atr(14), lookahead = barmerge.lookahead_off)
-
-// ---- per-bar gap maintenance: mitigation, overlap priority, relevance, wipe
+// ---- per-bar gap maintenance. Everything here is O(gaps); the O(gaps^2)
+// overlap pass and the redraw both run only when they can change something.
+bool gapSetChanged = array.size(gaps) != gapCountPrev
 if showFvg and array.size(gaps) > 0
     for i = array.size(gaps) - 1 to 0
         if i < array.size(gaps)
             Gap g = array.get(gaps, i)
             bool drop = false
-            // touched / respected
             if not g.touched and low <= g.top and high >= g.bot
                 g.touched := true
             if g.touched and not g.respected and (g.bull ? close > g.top : close < g.bot)
                 g.respected := true
-            // a higher timeframe gap in the same tier removes the lower one
-            if array.size(gaps) > 1
-                for j = 0 to array.size(gaps) - 1
-                    if j != i and not drop
-                        Gap o = array.get(gaps, j)
-                        bool overlap = g.top >= o.bot and g.bot <= o.top
-                        if o.rank > g.rank and overlap and (gapPruneAll or f_sameTier(g.rank, o.rank))
-                            drop := true
             // HTF relevance: nothing 50 light years away
-            if not drop and g.rank >= 3 and not na(atr5ref)
+            if g.rank >= 3 and not na(atr5ref)
                 float dist = close > g.top ? close - g.top : close < g.bot ? g.bot - close : 0.0
                 if dist > htfDistAtr * atr5ref
                     drop := true
@@ -1763,7 +1770,25 @@ if showFvg and array.size(gaps) > 0
                 f_delGap(gaps, i)
             else
                 array.set(gaps, i, g)
-                f_layoutGap(g)
+
+// a higher timeframe gap in the same tier removes the lower one
+if showFvg and gapSetChanged and array.size(gaps) > 1
+    for i = array.size(gaps) - 1 to 0
+        if i < array.size(gaps)
+            Gap g = array.get(gaps, i)
+            bool drop = false
+            for j = 0 to array.size(gaps) - 1
+                if j != i and not drop
+                    Gap o = array.get(gaps, j)
+                    if o.rank > g.rank and g.top >= o.bot and g.bot <= o.top and (gapPruneAll or f_sameTier(g.rank, o.rank))
+                        drop := true
+            if drop
+                f_delGap(gaps, i)
+gapCountPrev := array.size(gaps)
+
+if doLayout and array.size(gaps) > 0
+    for i = 0 to array.size(gaps) - 1
+        f_layoutGap(array.get(gaps, i))
 
 // =============================================================================
 // Breaker blocks: BOS -> CHoCH -> CISD confirmation
@@ -1773,6 +1798,7 @@ showBB        = input.bool(true, "Show breaker blocks", group = groupBB)
 bbSwingLen    = input.int(15, "Swing length for BOS / CHoCH", minval = 4, maxval = 60, group = groupBB)
 bbMaxBoxes    = input.int(6, "Max breaker boxes", minval = 1, maxval = 20, group = groupBB)
 bbCisdLook    = input.int(50, "Max candles walked back for CISD", minval = 3, maxval = 200, group = groupBB)
+bbMaxWidth    = input.int(120, "Max breaker width (bars)", minval = 20, maxval = 600, group = groupBB, tooltip = "The leg between two swings can be hundreds of bars on a fast chart. The box price range is still the full swing-low body to swing-high body; only how far LEFT it is drawn is capped.")
 bbShowCisd    = input.bool(true, "Draw the CISD line until confirmed", group = groupBB)
 bbFill        = input.color(#B2B5BE, "Breaker fill (light grey)", group = groupBB)
 bbTransp      = input.int(72, "Breaker fill transparency", minval = 0, maxval = 95, group = groupBB)
@@ -1892,7 +1918,7 @@ bool chochUp   = bbBias == "Bearish" and not na(legOriginHigh) and close > legOr
 
 if chochDown
     if showBB and not na(legPeakHighBody) and not na(legOriginLowBody)
-        f_addBrk(brks, math.max(legPeakHighBody, legOriginLowBody), math.min(legPeakHighBody, legOriginLowBody), math.min(legOriginLowBar, legPeakHighBar), false, f_cisdLevel(true, bbCisdLook), true)
+        f_addBrk(brks, math.max(legPeakHighBody, legOriginLowBody), math.min(legPeakHighBody, legOriginLowBody), math.max(math.max(legOriginLowBar, legPeakHighBar), bar_index - bbMaxWidth), false, f_cisdLevel(true, bbCisdLook), true)
         lastBrkBar := bar_index
         lastBrkBull := false
     bbBias := "None"
@@ -1903,7 +1929,7 @@ if chochDown
 
 if chochUp
     if showBB and not na(legTroughLowBody) and not na(legOriginHighBody)
-        f_addBrk(brks, math.max(legTroughLowBody, legOriginHighBody), math.min(legTroughLowBody, legOriginHighBody), math.min(legOriginHighBar, legTroughLowBar), true, f_cisdLevel(false, bbCisdLook), false)
+        f_addBrk(brks, math.max(legTroughLowBody, legOriginHighBody), math.min(legTroughLowBody, legOriginHighBody), math.max(math.max(legOriginHighBar, legTroughLowBar), bar_index - bbMaxWidth), true, f_cisdLevel(false, bbCisdLook), false)
         lastBrkBar := bar_index
         lastBrkBull := true
     bbBias := "None"
@@ -1951,7 +1977,7 @@ if array.size(brks) > 0
                 lastBrkConfirmedBull := b.bullBreaker
         if drop
             f_delBrk(brks, i)
-        else
+        else if doLayout
             f_layoutBrk(b)
 
 // =============================================================================
@@ -1997,8 +2023,7 @@ var PivSeq cmLtfLo = f_newPivSeq()
 
 [chSecPh, chSecPl, chSecPt] = f_pivFeed(syminfo.tickerid, smtHtfTf, smtHtfLen)
 [cmSecPh, cmSecPl, cmSecPt] = f_pivFeed(smtCompSym, smtHtfTf, smtHtfLen)
-[cmLtfPh, cmLtfPl, cmLtfPt] = f_pivFeed(smtCompSym, timeframe.period, smtLtfLen)
-float cmLive = request.security(smtCompSym, timeframe.period, close, lookahead = barmerge.lookahead_off)
+[cmLtfPh, cmLtfPl, cmLtfPt, cmLive] = request.security(smtCompSym, timeframe.period, [ta.pivothigh(high, smtLtfLen, smtLtfLen), ta.pivotlow(low, smtLtfLen, smtLtfLen), time[smtLtfLen], close], lookahead = barmerge.lookahead_off)
 
 bool smtHtfIsChart = timeframe.in_seconds(smtHtfTf) == chartSeconds
 float chHtfPh = smtHtfIsChart ? ta.pivothigh(high, smtHtfLen, smtHtfLen) : chSecPh
@@ -2256,15 +2281,24 @@ float mRisk = na(mStop) ? na : math.abs(mEntry - mStop)
 bool goLong = modelDir == 1
 
 // ---- take profits snapped to real wicks / levels
-float rawTp1 = na(mRisk) ? na : goLong ? mEntry + mRisk : mEntry - mRisk
-float tp1 = na(rawTp1) ? na : f_nextAnchor(tpHiPool, tpLoPool, levels, gaps, rawTp1, goLong)
-float tp1Use = na(tp1) ? rawTp1 : tp1
-float tp2 = na(tp1Use) ? na : f_nextAnchor(tpHiPool, tpLoPool, levels, gaps, tp1Use, goLong)
-float tp2Use = na(tp2) ? (na(mRisk) ? na : goLong ? mEntry + mRisk * 2 : mEntry - mRisk * 2) : tp2
-float tp3 = na(tp2Use) ? na : f_nextAnchor(tpHiPool, tpLoPool, levels, gaps, tp2Use, goLong)
-float tp3Use = na(tp3) ? (na(mRisk) ? na : goLong ? mEntry + mRisk * 3 : mEntry - mRisk * 3) : tp3
-float tp4 = na(tp3Use) ? na : f_nextAnchor(tpHiPool, tpLoPool, levels, gaps, tp3Use, goLong)
-float tp4Use = na(tp4) ? (na(mRisk) ? na : goLong ? mEntry + mRisk * 4 : mEntry - mRisk * 4) : tp4
+bool tpNeeded = showModel and modelDir != 0 and sessionOk and not (useChopFilter and isChop) and not na(mRisk) and mRisk > 0
+float tp1 = na
+float tp2 = na
+float tp3 = na
+float tp4 = na
+float tp1Use = na
+float tp2Use = na
+float tp3Use = na
+float tp4Use = na
+if tpNeeded
+    tp1 := f_nextAnchor(tpHiPool, tpLoPool, levels, gaps, goLong ? mEntry + mRisk : mEntry - mRisk, goLong)
+    tp1Use := na(tp1) ? (goLong ? mEntry + mRisk : mEntry - mRisk) : tp1
+    tp2 := f_nextAnchor(tpHiPool, tpLoPool, levels, gaps, tp1Use, goLong)
+    tp2Use := na(tp2) ? (goLong ? mEntry + mRisk * 2 : mEntry - mRisk * 2) : tp2
+    tp3 := f_nextAnchor(tpHiPool, tpLoPool, levels, gaps, tp2Use, goLong)
+    tp3Use := na(tp3) ? (goLong ? mEntry + mRisk * 3 : mEntry - mRisk * 3) : tp3
+    tp4 := f_nextAnchor(tpHiPool, tpLoPool, levels, gaps, tp3Use, goLong)
+    tp4Use := na(tp4) ? (goLong ? mEntry + mRisk * 4 : mEntry - mRisk * 4) : tp4
 bool tpsAnchored = not na(tp1) and not na(tp2) and not na(tp3)
 
 float mRR = na(mRisk) or mRisk <= 0 or na(tp2Use) ? na : math.abs(tp2Use - mEntry) / mRisk
@@ -2507,7 +2541,8 @@ if array.size(trades) > 0
             f_record(stN, stFull, st3, st2, st1, stLoss, stCap, f_gradeIdx(t.grade), t.hits, f_capPct(t), maxTp)
             f_record(stN, stFull, st3, st2, st1, stLoss, stCap, t.setup == "Continuation" ? 7 : 8, t.hits, f_capPct(t), maxTp)
             array.set(trades, i, t)
-        f_layoutTrade(t)
+        if doLayout
+            f_layoutTrade(t)
 
 // =============================================================================
 // Panels
@@ -2516,7 +2551,7 @@ groupPanel = "Panels"
 showChecklist = input.bool(true, "Show model checklist", group = groupPanel)
 checklistPos  = input.string("middle_right", "Checklist position", options = ["middle_left", "middle_center", "middle_right", "bottom_left", "bottom_center", "bottom_right"], group = groupPanel)
 showStats     = input.bool(true, "Show performance stats", group = groupPanel)
-statsPos      = input.string("bottom_right", "Stats position", options = ["middle_left", "middle_center", "middle_right", "bottom_left", "bottom_center", "bottom_right"], group = groupPanel)
+statsPos      = input.string("bottom_left", "Stats position", options = ["middle_left", "middle_center", "middle_right", "bottom_left", "bottom_center", "bottom_right"], group = groupPanel)
 showDiag      = input.bool(false, "Show diagnostics", group = groupPanel)
 diagPos       = input.string("bottom_left", "Diagnostics position", options = ["middle_left", "middle_center", "middle_right", "bottom_left", "bottom_center", "bottom_right"], group = groupPanel)
 panelText     = input.color(color.white, "Panel text", group = groupPanel)

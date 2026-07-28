@@ -99,6 +99,37 @@ All four are settings, so change them without touching code:
 3. News — **built-in recurring plus two custom windows**.
 4. HTF gap filter — **distance + respected + first/last combined** (`htfDistAtr`, `htfNeedRespect`, `gapFirstLast`).
 
+## Scroll drift — round 2
+
+Round 1 moved the *boxes and rays* to `bar_index`. It missed the **labels**: all 7 label sites
+(session levels, profile levels, intraday H/L, and the Daily/Weekly profile) anchored at
+`f_labelX()` = `time + 14 x chartMs` — a future timestamp. TradingView projects future
+timestamps using the visible bar spacing, so they slid every time the chart was scrolled or
+zoomed. They now use `f_labelXi()` = `bar_index + 14` with `xloc.bar_index`.
+
+## Breaker boxes were screen-wide
+
+The box anchored at `math.min(originBar, peakBar)` — the *older* of the two swings. On a
+trending 1m chart the swing low behind a BOS can be 700 bars back, so the box covered the whole
+screen. It now anchors at the swing that was actually broken (`math.max`) and is width-capped by
+`Max breaker width (bars)`, default 120. The box's price range is unchanged: still the full
+swing-low body to swing-high body.
+
+## Runtime
+
+Was near the limit. Six changes, no behaviour lost:
+- Layout is deferred to the last bar. Drawings persist, so only the final bar's positions are
+  ever visible; repositioning every object on every historical bar was pure waste.
+- The O(gaps squared) overlap pass runs only when the gap set actually changed, not every bar.
+- The sweep-watcher sync (O(levels x watchlist)) runs only when a session level appears. The live
+  intraday high/low left the watchlist — it moves every bar and the BSL/SSL rays cover those wicks.
+- BSL/SSL session dedup re-checks only when a session level appears.
+- The four take-profit anchor searches run only when a plan is actually possible.
+- Two `request.security` calls folded away (13 to 11): the ATR reference rides on the MTF-a feed,
+  and the comparison symbol's live close rides on its own pivot feed.
+- `Lower-TF bars requested` default 100000 to **20000**. This is the single biggest lever in the
+  whole script — raise it only if the profile looks short on history.
+
 ## Scroll drift — fixed
 
 Every drawing that extends past the last bar (gaps, breaker boxes, BSL/SSL rays, the whole trade
