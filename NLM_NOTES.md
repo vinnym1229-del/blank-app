@@ -99,6 +99,32 @@ All four are settings, so change them without touching code:
 3. News — **built-in recurring plus two custom windows**.
 4. HTF gap filter — **distance + respected + first/last combined** (`htfDistAtr`, `htfNeedRespect`, `gapFirstLast`).
 
+## Deep-review pass — six real bugs found and fixed
+
+These are logic bugs, not lint findings. Each one changed behaviour.
+
+1. **The stop ignored the swept level.** It used only `lowest(low, 10)` / `highest(high, 10)`,
+   so if the sweep happened more than 10 bars ago the stop landed on an arbitrary recent extreme
+   while the panel still claimed "swept wick". It now anchors on the actual swept price when a
+   matching sweep exists, and the panel says "recent wick" honestly when one does not.
+2. **The confirmation-wick fallback was direction-blind.** It picked the *nearest* inverted LTF
+   gap or confirmed breaker regardless of which way it pointed, so a long could anchor its stop
+   under a bearish object. It now requires the object to face the trade's direction.
+3. **A bare sweep with no confirmation could reach grade B and be traded.** Sweep alone sets a
+   direction, and Condition + Condition+ + Pullback + Pullback+ + RR sums to 75% = B, which
+   passes a B- minimum. Confirmation is now a hard gate (`Confirmation is a hard gate`, on).
+4. **Plans could be built on floating R-multiples.** When no real wick sat beyond 1R the target
+   fell back to a bare multiple — exactly the "floating in air" case you called out. Targets must
+   now sit on a real wick or level (`Targets must sit on a real wick / level`, on).
+5. **Nothing capped the total gap count.** Overrunning `max_boxes_count` makes TradingView
+   silently drop the oldest drawings while the arrays still hold their ids, so gaps vanish for no
+   visible reason. Hard ceiling of 24, dropping the lowest-timeframe oldest gap first.
+6. **`g.bull == not wantHigh` would have misparsed.** `not` binds *looser* than `==` in Pine.
+   Rewritten as `g.bull != wantHigh`.
+
+Also added: RR is now measured to a target you choose (TP1/TP2/TP3, default TP2) instead of being
+hard-wired to TP2, and an `NLM setup` alertcondition fires when a plan is drawn.
+
 ## Scroll drift — round 2
 
 Round 1 moved the *boxes and rays* to `bar_index`. It missed the **labels**: all 7 label sites

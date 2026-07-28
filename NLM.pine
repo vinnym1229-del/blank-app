@@ -1366,6 +1366,7 @@ fvgTf5 = input.timeframe("240", "HTF c", group = groupFvg)
 fvgBodyPct     = input.float(50.0, "Displacement body % of range", minval = 10, maxval = 95, group = groupFvg)
 gapExtendBars  = input.int(20, "Extend gaps this many bars past price", minval = 2, maxval = 100, group = groupFvg)
 gapFirstLast   = input.bool(true, "Keep only the first and last gap of each leg", group = groupFvg, tooltip = "Respected and inverted gaps are always kept regardless.")
+maxTotalGaps   = input.int(24, "Max gaps on the chart (all timeframes)", minval = 4, maxval = 80, group = groupFvg, tooltip = "Hard ceiling so the drawing budget cannot overrun. The lowest-timeframe, oldest gap is dropped first.")
 gapPruneAll    = input.bool(false, "Prune overlaps across every timeframe", group = groupFvg, tooltip = "Off: a higher timeframe only removes an overlapping gap inside the same tier (30s vs 1m, 5m vs 15m, 15m/1H/4H). This keeps the 1m gap that sits inside a 5m gap, which the confirmation leg of the model depends on.")
 htfDistAtr     = input.float(25, "HTF gap max distance (x 5m ATR)", minval = 2, maxval = 200, group = groupFvg)
 htfNeedRespect = input.bool(false, "HTF gaps must already be respected", group = groupFvg)
@@ -1784,6 +1785,22 @@ if showFvg and gapSetChanged and array.size(gaps) > 1
                         drop := true
             if drop
                 f_delGap(gaps, i)
+// hard ceiling: drop the lowest-timeframe, oldest gap first
+int gapCapGuard = 0
+while array.size(gaps) > maxTotalGaps and gapCapGuard < 100
+    gapCapGuard += 1
+    int worstIdx = -1
+    int worstKey = na
+    for i = 0 to array.size(gaps) - 1
+        Gap g = array.get(gaps, i)
+        int key = g.rank * 1000000 + g.bornBar
+        if worstIdx == -1 or key < worstKey
+            worstIdx := i
+            worstKey := key
+    if worstIdx >= 0
+        f_delGap(gaps, worstIdx)
+    else
+        gapCapGuard := 999
 gapCountPrev := array.size(gaps)
 
 if doLayout and array.size(gaps) > 0
@@ -2143,6 +2160,9 @@ condSweepBars  = input.int(20, "Condition: bars since a sweep", minval = 1, maxv
 confirmWindow  = input.int(3, "Confirmation freshness (bars)", minval = 1, maxval = 50, group = groupModel)
 mtfMemoryBars  = input.int(25, "Bars price stays \"in the MTF gap\" for continuation", minval = 3, maxval = 200, group = groupModel)
 minRR          = input.float(2.0, "Minimum RR (hard gate)", minval = 0.5, maxval = 10, step = 0.1, group = groupModel)
+rrTargetSel    = input.string("TP2", "RR measured to", options = ["TP1", "TP2", "TP3"], group = groupModel)
+requireConfirm = input.bool(true, "Confirmation is a hard gate", group = groupModel, tooltip = "Off, a sweep with no IFVG or breaker can still reach B and be traded.")
+requireAnchored = input.bool(true, "Targets must sit on a real wick / level", group = groupModel)
 stopBufferTicks = input.int(8, "Stop buffer beyond the wick (ticks)", minval = 0, maxval = 500, group = groupModel)
 stopLookback   = input.int(10, "Bars searched for the sweep wick", minval = 2, maxval = 100, group = groupModel)
 stopMaxAtr     = input.float(1.5, "Wick stop is \"too large\" beyond (x 5m ATR)", minval = 0.3, maxval = 10, step = 0.1, group = groupModel)
@@ -2205,7 +2225,7 @@ f_confWick(array<Gap> gs, array<Brk> bs, float px, bool wantHigh) =>
     if array.size(gs) > 0
         for i = 0 to array.size(gs) - 1
             Gap g = array.get(gs, i)
-            if g.inverted and g.rank <= 1
+            if g.inverted and g.rank <= 1 and g.bull != wantHigh
                 float d = math.abs((g.top + g.bot) / 2 - px)
                 if na(bestDist) or d < bestDist
                     bestDist := d
@@ -2213,7 +2233,7 @@ f_confWick(array<Gap> gs, array<Brk> bs, float px, bool wantHigh) =>
     if array.size(bs) > 0
         for i = 0 to array.size(bs) - 1
             Brk b = array.get(bs, i)
-            if b.confirmed
+            if b.confirmed and b.bullBreaker != wantHigh
                 float d = math.abs((b.top + b.bot) / 2 - px)
                 if na(bestDist) or d < bestDist
                     bestDist := d
@@ -2263,7 +2283,13 @@ float mEntry = close
 float mStop = na
 string stopSource = "-"
 float stopBuf = stopBufferTicks * syminfo.mintick
-float wickStop = modelDir == 1 ? ta.lowest(low, stopLookback) - stopBuf : ta.highest(high, stopLookback) + stopBuf
+float loN = ta.lowest(low, stopLookback)
+float hiN = ta.highest(high, stopLookback)
+bool sweepLong  = recentSweep and not lastSweepIsHigh and not na(lastSweepPrice)
+bool sweepShort = recentSweep and lastSweepIsHigh and not na(lastSweepPrice)
+// anchor on the actual swept level when there is one, so an older sweep still
+// pins the stop instead of falling back to an arbitrary N-bar extreme
+float wickStop = modelDir == 1 ? (sweepLong ? math.min(loN, lastSweepPrice) : loN) - stopBuf : (sweepShort ? math.max(hiN, lastSweepPrice) : hiN) + stopBuf
 float confHi = f_confWick(gaps, brks, close, true)
 float confLo = f_confWick(gaps, brks, close, false)
 if modelDir != 0
@@ -2275,7 +2301,7 @@ if modelDir != 0
         stopSource := "LTF confirmation wick"
     else
         mStop := wickStop
-        stopSource := "swept wick"
+        stopSource := (modelDir == 1 ? sweepLong : sweepShort) ? "swept wick" : "recent wick"
 
 float mRisk = na(mStop) ? na : math.abs(mEntry - mStop)
 bool goLong = modelDir == 1
@@ -2301,7 +2327,8 @@ if tpNeeded
     tp4Use := na(tp4) ? (goLong ? mEntry + mRisk * 4 : mEntry - mRisk * 4) : tp4
 bool tpsAnchored = not na(tp1) and not na(tp2) and not na(tp3)
 
-float mRR = na(mRisk) or mRisk <= 0 or na(tp2Use) ? na : math.abs(tp2Use - mEntry) / mRisk
+float rrTarget = rrTargetSel == "TP1" ? tp1Use : rrTargetSel == "TP3" ? tp3Use : tp2Use
+float mRR = na(mRisk) or mRisk <= 0 or na(rrTarget) ? na : math.abs(rrTarget - mEntry) / mRisk
 bool cRiskReward = not na(mRR) and mRR >= minRR
 
 // ---- score and grade
@@ -2316,7 +2343,7 @@ f_gradeIdx(string g) =>
     g == "A+" ? 0 : g == "A" ? 1 : g == "A-" ? 2 : g == "B+" ? 3 : g == "B" ? 4 : g == "B-" ? 5 : g == "C" ? 6 : -1
 
 bool chopBlocked = useChopFilter and isChop
-bool gatesOk = sessionOk and cRiskReward and modelDir != 0 and not chopBlocked
+bool gatesOk = sessionOk and cRiskReward and modelDir != 0 and not chopBlocked and (not requireConfirm or cConfirmation) and (not requireAnchored or tpsAnchored)
 string mGrade = not showModel or not gatesOk ? "No Trade" : f_gradeFromScore(mScore)
 
 // ---- sizing
@@ -2393,7 +2420,7 @@ f_alloc(int k) =>
 f_planName(int i, bool beMoved) =>
     i == 0 ? "Entry" : i == 1 ? (beMoved ? "BE" : "Stop Loss") : i == 2 ? "TP1/BE " + str.tostring(tp1Alloc, "#") + "%" : i == 3 ? "TP2 " + str.tostring(tp2Alloc, "#") + "%" : i == 4 ? "TP3 " + str.tostring(tp3Alloc, "#") + "%" : "TP4 " + str.tostring(tp4Alloc, "#") + "%"
 
-f_outcome(int hits, bool anyTp) =>
+f_outcome(int hits) =>
     hits >= (useTp4 ? 4 : 3) ? "Full Win" : hits == 3 ? "Partial (3 TP)" : hits == 2 ? "Partial (2 TP)" : hits == 1 ? "Partial (1 TP)" : "Loss"
 
 f_delTrade(array<Trade> ts, int i) =>
@@ -2487,7 +2514,7 @@ f_updateTrade(Trade t) =>
                 for k = 0 to 5
                     if na(array.get(t.lnEnd, k))
                         array.set(t.lnEnd, k, bar_index)
-            label.set_text(t.lbEntry, (t.isLong ? "Long (" : "Short (") + t.grade + ") - " + str.tostring(t.contracts) + " - " + f_outcome(t.hits, t.hits >= 1))
+            label.set_text(t.lbEntry, (t.isLong ? "Long (" : "Short (") + t.grade + ") - " + str.tostring(t.contracts) + " - " + f_outcome(t.hits))
             // faded green if it closed beyond breakeven, black if it gave TP1 back
             // at breakeven, faded red on a straight loss
             label.set_textcolor(t.lbEntry, t.hits == 0 ? color.new(#F23645, 25) : t.hits == 1 ? color.new(color.black, 0) : color.new(#089981, 25))
@@ -2553,7 +2580,7 @@ checklistPos  = input.string("middle_right", "Checklist position", options = ["m
 showStats     = input.bool(true, "Show performance stats", group = groupPanel)
 statsPos      = input.string("bottom_left", "Stats position", options = ["middle_left", "middle_center", "middle_right", "bottom_left", "bottom_center", "bottom_right"], group = groupPanel)
 showDiag      = input.bool(false, "Show diagnostics", group = groupPanel)
-diagPos       = input.string("bottom_left", "Diagnostics position", options = ["middle_left", "middle_center", "middle_right", "bottom_left", "bottom_center", "bottom_right"], group = groupPanel)
+diagPos       = input.string("middle_left", "Diagnostics position", options = ["middle_left", "middle_center", "middle_right", "bottom_left", "bottom_center", "bottom_right"], group = groupPanel)
 panelText     = input.color(color.white, "Panel text", group = groupPanel)
 panelBg       = input.color(#1E222D, "Panel background", group = groupPanel)
 
@@ -2686,5 +2713,7 @@ if showStats and barstate.islast
     f_statRow(stTbl, 10, "A- to A+", aN, aF, a3s, a2s, a1s, aL, aC)
     f_statRow(stTbl, 11, "Overall", tN, tF, t3, t2, t1, tL, tC)
 
+bool planFiredThisBar = not na(lastTradeBar) and lastTradeBar == bar_index
+alertcondition(planFiredThisBar, "NLM setup", "An NLM setup qualified and a trade plan was drawn.")
 alertcondition(gapFlips > 0, "Gap inverted", "A tracked fair value gap inverted.")
 alertcondition(liqSweptThisBar, "BSL/SSL swept", "A tracked BSL/SSL was swept.")
