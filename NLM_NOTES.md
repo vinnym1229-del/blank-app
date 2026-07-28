@@ -99,6 +99,27 @@ All four are settings, so change them without touching code:
 3. News — **built-in recurring plus two custom windows**.
 4. HTF gap filter — **distance + respected + first/last combined** (`htfDistAtr`, `htfNeedRespect`, `gapFirstLast`).
 
+## Gap alignment + why nothing was printing
+
+**Boxes started too far right.** The left edge anchored at the bar where the *middle* candle
+CLOSED. On a 1m gap that is only one bar off, but on a 15m gap viewed on a 1m chart it lands 15
+bars right of where the pattern begins, and on a 1H gap, 60 bars. Boxes now anchor at the OPEN of
+the oldest candle of the three, so the box starts exactly where the gap-forming sequence starts,
+on every timeframe.
+
+**No trades were printing because of a gate I added the round before.** Requiring TP1, TP2 *and*
+TP3 to all snap to a real level sounds right, but near a session extreme there are simply not
+three levels left in front of price, so the gate could never pass. Only **TP1** is gated now —
+the one that actually matters. TP2 and TP3 still prefer real levels and fall back to R-multiples
+when none remain; the checklist reports `2/3 TPs on wicks` so you can see it.
+
+**The checklist now has a `Blocked by` row** naming the first failing gate: `outside session`,
+`news window`, `chop 71`, `no direction yet`, `no IFVG / breaker`, `RR 1.4 < 2.0`, `TP1 not on a
+wick`, `score 54% < 60`, `below B-`, `trade already open`, or `cooldown`. No more guessing.
+
+Confirmation freshness went 3 to 5 bars, and gaps within 8 ticks of an existing gap on the same
+timeframe now merge instead of stacking as near-duplicates.
+
 ## Deep-review pass — six real bugs found and fixed
 
 These are logic bugs, not lint findings. Each one changed behaviour.

@@ -1365,6 +1365,7 @@ fvgTf4 = input.timeframe("60", "HTF b", group = groupFvg)
 fvgTf5 = input.timeframe("240", "HTF c", group = groupFvg)
 fvgBodyPct     = input.float(50.0, "Displacement body % of range", minval = 10, maxval = 95, group = groupFvg)
 gapExtendBars  = input.int(20, "Extend gaps this many bars past price", minval = 2, maxval = 100, group = groupFvg)
+gapMergeTicks  = input.int(8, "Treat gaps within N ticks as the same gap", minval = 1, maxval = 100, group = groupFvg)
 gapFirstLast   = input.bool(true, "Keep only the first and last gap of each leg", group = groupFvg, tooltip = "Respected and inverted gaps are always kept regardless.")
 maxTotalGaps   = input.int(24, "Max gaps on the chart (all timeframes)", minval = 4, maxval = 80, group = groupFvg, tooltip = "Hard ceiling so the drawing budget cannot overrun. The lowest-timeframe, oldest gap is dropped first.")
 gapPruneAll    = input.bool(false, "Prune overlaps across every timeframe", group = groupFvg, tooltip = "Off: a higher timeframe only removes an overlapping gap inside the same tier (30s vs 1m, 5m vs 15m, 15m/1H/4H). This keeps the 1m gap that sits inside a 5m gap, which the confirmation leg of the model depends on.")
@@ -1541,7 +1542,8 @@ f_detectGap(array<Gap> gs, Bar3 b, int tfSec, string tfName, int rank, bool allo
         float l2 = array.get(b.l, 1)
         float o2 = array.get(b.o, 1)
         float c2 = array.get(b.c, 1)
-        int   t2 = array.get(b.bi, 1)
+        int   tfBars = math.max(1, int(tfSec / chartSeconds))
+        int   t2 = math.max(0, array.get(b.bi, 2) - tfBars + 1)
         float h3 = array.get(b.h, 2)
         float l3 = array.get(b.l, 2)
         float rng2 = h2 - l2
@@ -1557,7 +1559,7 @@ f_detectGap(array<Gap> gs, Bar3 b, int tfSec, string tfName, int rank, bool allo
             if array.size(gs) > 0
                 for i = 0 to array.size(gs) - 1
                     Gap g = array.get(gs, i)
-                    if g.tfSec == tfSec and f_near(g.top, top, 1) and f_near(g.bot, bot, 1)
+                    if g.tfSec == tfSec and f_near(g.top, top, gapMergeTicks) and f_near(g.bot, bot, gapMergeTicks)
                         dup := true
             if not dup
                 // BPR needs an FVG and an IFVG of the SAME timeframe, opposite sides
@@ -2157,12 +2159,12 @@ bool smtLtfFreshNow = smtLtfOn and not na(smtLtfBar) and bar_index - smtLtfBar <
 groupModel = "Model"
 showModel      = input.bool(true, "Run the model", group = groupModel)
 condSweepBars  = input.int(20, "Condition: bars since a sweep", minval = 1, maxval = 200, group = groupModel)
-confirmWindow  = input.int(3, "Confirmation freshness (bars)", minval = 1, maxval = 50, group = groupModel)
+confirmWindow  = input.int(5, "Confirmation freshness (bars)", minval = 1, maxval = 50, group = groupModel)
 mtfMemoryBars  = input.int(25, "Bars price stays \"in the MTF gap\" for continuation", minval = 3, maxval = 200, group = groupModel)
 minRR          = input.float(2.0, "Minimum RR (hard gate)", minval = 0.5, maxval = 10, step = 0.1, group = groupModel)
 rrTargetSel    = input.string("TP2", "RR measured to", options = ["TP1", "TP2", "TP3"], group = groupModel)
 requireConfirm = input.bool(true, "Confirmation is a hard gate", group = groupModel, tooltip = "Off, a sweep with no IFVG or breaker can still reach B and be traded.")
-requireAnchored = input.bool(true, "Targets must sit on a real wick / level", group = groupModel)
+requireAnchored = input.bool(true, "TP1 must sit on a real wick / level", group = groupModel, tooltip = "Only TP1 is gated. TP2 and TP3 still prefer real levels and fall back to R-multiples when none are left in front of price; the checklist reports how many snapped.")
 stopBufferTicks = input.int(8, "Stop buffer beyond the wick (ticks)", minval = 0, maxval = 500, group = groupModel)
 stopLookback   = input.int(10, "Bars searched for the sweep wick", minval = 2, maxval = 100, group = groupModel)
 stopMaxAtr     = input.float(1.5, "Wick stop is \"too large\" beyond (x 5m ATR)", minval = 0.3, maxval = 10, step = 0.1, group = groupModel)
@@ -2325,7 +2327,9 @@ if tpNeeded
     tp3Use := na(tp3) ? (goLong ? mEntry + mRisk * 3 : mEntry - mRisk * 3) : tp3
     tp4 := f_nextAnchor(tpHiPool, tpLoPool, levels, gaps, tp3Use, goLong)
     tp4Use := na(tp4) ? (goLong ? mEntry + mRisk * 4 : mEntry - mRisk * 4) : tp4
-bool tpsAnchored = not na(tp1) and not na(tp2) and not na(tp3)
+bool tp1Anchored = not na(tp1)
+int  tpAnchorCount = (na(tp1) ? 0 : 1) + (na(tp2) ? 0 : 1) + (na(tp3) ? 0 : 1)
+bool tpsAnchored = tp1Anchored
 
 float rrTarget = rrTargetSel == "TP1" ? tp1Use : rrTargetSel == "TP3" ? tp3Use : tp2Use
 float mRR = na(mRisk) or mRisk <= 0 or na(rrTarget) ? na : math.abs(rrTarget - mEntry) / mRisk
@@ -2571,6 +2575,31 @@ if array.size(trades) > 0
         if doLayout
             f_layoutTrade(t)
 
+// Why the model is not producing a trade right now. First failing gate wins.
+string blockReason = "-"
+if not showModel
+    blockReason := "model off"
+else if not sessionOk
+    blockReason := inNews ? "news window" : "outside session"
+else if chopBlocked
+    blockReason := "chop " + str.tostring(chopScore, "#")
+else if modelDir == 0
+    blockReason := "no direction yet"
+else if requireConfirm and not cConfirmation
+    blockReason := "no IFVG / breaker"
+else if not cRiskReward
+    blockReason := na(mRR) ? "no target found" : "RR " + str.tostring(mRR, "#.#") + " < " + str.tostring(minRR, "#.#")
+else if requireAnchored and not tp1Anchored
+    blockReason := "TP1 not on a wick"
+else if f_gradeIdx(mGrade) < 0
+    blockReason := "score " + str.tostring(mScore, "#") + "% < 60"
+else if not planGradeOk
+    blockReason := "below " + planMinGrade
+else if anyActive
+    blockReason := "trade already open"
+else if not na(lastTradeBar) and bar_index - lastTradeBar < planCooldown
+    blockReason := "cooldown"
+
 // =============================================================================
 // Panels
 // =============================================================================
@@ -2600,7 +2629,7 @@ f_num(float v) =>
 f_ago(int b) =>
     na(b) ? "n/a" : str.tostring(bar_index - b)
 
-var table clTbl = table.new(position.middle_right, 3, 14, bgcolor = panelBg, border_width = 1, frame_width = 1, frame_color = color.new(color.gray, 40))
+var table clTbl = table.new(position.middle_right, 3, 15, bgcolor = panelBg, border_width = 1, frame_width = 1, frame_color = color.new(color.gray, 40))
 var table dgTbl = table.new(position.bottom_left, 2, 14, bgcolor = panelBg, border_width = 1, frame_width = 1, frame_color = color.new(color.gray, 40))
 var table stTbl = table.new(position.bottom_right, 8, 13, bgcolor = panelBg, border_width = 1, frame_width = 1, frame_color = color.new(color.gray, 40))
 
@@ -2617,8 +2646,9 @@ f_r3(table tb, int r, string a, string b, string c, color bc) =>
 
 if showChecklist and barstate.islast
     table.set_position(clTbl, f_pos(checklistPos))
-    table.clear(clTbl, 0, 0, 2, 13)
+    table.clear(clTbl, 0, 0, 2, 14)
     f_r3(clTbl, 0, "NLM " + setupType, mGrade, str.tostring(mScore, "#.#") + "%", mGrade == "No Trade" ? color.new(#F23645, 0) : color.new(#089981, 0))
+    f_r3(clTbl, 14, "Blocked by", blockReason, "", blockReason == "-" ? color.new(#089981, 0) : color.new(#FFB300, 0))
     f_r3(clTbl, 1, "Session / news", f_tick(sessionOk), inNews ? "news" : inAsiaTrad ? "asia" : inRth ? "rth" : "closed", f_tickCol(sessionOk))
     f_r3(clTbl, 2, "Chop", f_tick(not chopBlocked), str.tostring(chopScore, "#") + "/100", f_tickCol(not chopBlocked))
     f_r3(clTbl, 3, "Condition", f_tick(cCondition), str.tostring(wCondition, "#") + "%", f_tickCol(cCondition))
@@ -2627,7 +2657,7 @@ if showChecklist and barstate.islast
     f_r3(clTbl, 6, "Pullback+", f_tick(cPullbackPlus), str.tostring(wPullbackPlus, "#") + "%", f_tickCol(cPullbackPlus))
     f_r3(clTbl, 7, "Confirmation", f_tick(cConfirmation), freshBrk ? "BB" : freshIfvg ? "IFVG" : "-", f_tickCol(cConfirmation))
     f_r3(clTbl, 8, "Risk / reward", f_tick(cRiskReward), f_num(mRR) + "R", f_tickCol(cRiskReward))
-    f_r3(clTbl, 9, "Direction", modelDir == 1 ? "Long" : modelDir == -1 ? "Short" : "-", tpsAnchored ? "TPs on wicks" : "TPs unanchored", modelDir == 0 ? color.new(color.gray, 0) : modelDir == 1 ? color.new(#089981, 0) : color.new(#F23645, 0))
+    f_r3(clTbl, 9, "Direction", modelDir == 1 ? "Long" : modelDir == -1 ? "Short" : "-", str.tostring(tpAnchorCount) + "/3 TPs on wicks", modelDir == 0 ? color.new(color.gray, 0) : modelDir == 1 ? color.new(#089981, 0) : color.new(#F23645, 0))
     f_r3(clTbl, 10, "Entry / stop", f_num(mEntry), f_num(mStop), panelText)
     f_r3(clTbl, 11, "Stop source", stopSource, str.tostring(mRisk, "#.##") + " pts", panelText)
     f_r3(clTbl, 12, "TP1 / TP2 / TP3", f_num(tp1Use), f_num(tp2Use) + " / " + f_num(tp3Use), panelText)
