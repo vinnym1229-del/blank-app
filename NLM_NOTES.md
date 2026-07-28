@@ -99,6 +99,42 @@ All four are settings, so change them without touching code:
 3. News — **built-in recurring plus two custom windows**.
 4. HTF gap filter — **distance + respected + first/last combined** (`htfDistAtr`, `htfNeedRespect`, `gapFirstLast`).
 
+## Why nonsensical trades were firing
+
+`Condition`, `Pullback` and `Confirmation` were three **independent time windows**
+that only had to OVERLAP. A session sweep 18 bars ago, an unrelated MTF gap touch
+20 bars ago, and a 1m IFVG 3 bars ago pointing whichever way it liked would all be
+"fresh" at the same moment, and the model fired. Nothing required them to be the
+same event unfolding, or even to happen in order.
+
+Your model is a **sequence**: sweep -> price pulls into the MTF gap -> a LTF gap
+inverts coming back out of it. That order is now enforced —
+`sweep bar <= MTF gap bar <= confirmation bar`. The checklist reports
+`out of sequence` when the legs are present but jumbled, so you can see it rather
+than wonder. `Enforce sweep -> MTF gap -> confirmation ORDER` in the Model group
+turns it off if it proves too strict.
+
+## Why TP1 was not on the near wick
+
+The stop was too wide, so 1R was too far, so the first anchor at or beyond 1R
+skipped straight past the wick you expected. Both of your notes — TP1 belonging
+where the final target sat on trade one, and TP1 belonging at the recent wick high
+on trade two — are the same symptom.
+
+The wick search dropped from 10 bars to 6, and "too large" fell from 1.5x to 1.0x
+the 5m ATR, so the confirmation-candle stop takes over sooner. A tighter stop pulls
+1R in and TP1 lands on the near wick. `TP1 minimum R` is now an input if you want
+TP1 to snap even closer than 1R.
+
+## Entry banner
+
+The entry candle carries a filled banner: `LONG B | 19 MNQ` on the first line, the
+setup and the reason on the second — `Continuation | sweep > in MTF gap > IFVG` —
+so the chart itself answers "why was this taken". On resolution the outcome is
+appended and the banner fills solid: green for a win, black for breakeven, red for
+a loss. Target lines are green dashed and turn solid and thick as each one is hit;
+the stop line is red, the entry line black.
+
 ## The historical-buffer error — root cause
 
 ```

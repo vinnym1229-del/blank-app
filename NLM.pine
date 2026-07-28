@@ -2182,10 +2182,12 @@ mtfMemoryBars  = input.int(25, "Bars price stays \"in the MTF gap\" for continua
 minRR          = input.float(2.0, "Minimum RR (hard gate)", minval = 0.5, maxval = 10, step = 0.1, group = groupModel)
 rrTargetSel    = input.string("TP2", "RR measured to", options = ["TP1", "TP2", "TP3"], group = groupModel)
 requireConfirm = input.bool(true, "Confirmation is a hard gate", group = groupModel, tooltip = "Off, a sweep with no IFVG or breaker can still reach B and be traded.")
+requireSequence = input.bool(true, "Enforce sweep -> MTF gap -> confirmation ORDER", group = groupModel, tooltip = "Without this the three legs are independent time windows that only have to OVERLAP, so a sweep 18 bars ago, an unrelated gap touch 20 bars ago and an IFVG 3 bars ago in any direction produce a signal. On, they must occur in that order.")
+tp1MinR        = input.float(1.0, "TP1 minimum R", minval = 0.3, maxval = 3, step = 0.1, group = groupModel)
 requireAnchored = input.bool(true, "TP1 must sit on a real wick / level", group = groupModel, tooltip = "Only TP1 is gated. TP2 and TP3 still prefer real levels and fall back to R-multiples when none are left in front of price; the checklist reports how many snapped.")
 stopBufferTicks = input.int(8, "Stop buffer beyond the wick (ticks)", minval = 0, maxval = 500, group = groupModel)
-stopLookback   = input.int(10, "Bars searched for the sweep wick", minval = 2, maxval = 100, group = groupModel)
-stopMaxAtr     = input.float(1.5, "Wick stop is \"too large\" beyond (x 5m ATR)", minval = 0.3, maxval = 10, step = 0.1, group = groupModel)
+stopLookback   = input.int(6, "Bars searched for the sweep wick", minval = 2, maxval = 100, group = groupModel)
+stopMaxAtr     = input.float(1.0, "Wick stop is \"too large\" beyond (x 5m ATR)", minval = 0.3, maxval = 10, step = 0.1, group = groupModel)
 wCondition     = input.float(20, "Weight: Condition", minval = 0, maxval = 100, group = groupModel)
 wConditionPlus = input.float(15, "Weight: Condition+", minval = 0, maxval = 100, group = groupModel)
 wPullback      = input.float(15, "Weight: Pullback", minval = 0, maxval = 100, group = groupModel)
@@ -2290,6 +2292,10 @@ bool cPullback      = inMtfGap or mtfMemory
 bool cPullbackPlus  = smtLtfFreshNow and (inMtfGap or mtfMemory)
 bool cConfirmation  = freshIfvg or freshBrk
 
+// the bar the confirmation actually landed on, for the sequence check
+int confBar = freshBrk ? lastBrkConfirmedBar : freshIfvg ? lastIfvgBar : na
+bool seqOk = not requireSequence or (not na(lastSessionSweepBar) and not na(mtfGapBar) and not na(confBar) and lastSessionSweepBar <= mtfGapBar and mtfGapBar <= confBar)
+
 int modelDir = 0
 if freshBrk
     modelDir := lastBrkConfirmedBull ? 1 : -1
@@ -2300,6 +2306,7 @@ else if recentSweep
 
 // continuation = swept, pulled into the MTF gap, then inverted a LTF gap back
 // out of it in the SAME direction as that MTF gap. Anything else is a reversal.
+string whyText = (ovnSweep ? "sweep" : inHtfGap ? "HTF gap" : "-") + " > " + (inMtfGap ? "in MTF gap" : mtfMemory ? "MTF gap" : "-") + " > " + (freshBrk ? "BB" : freshIfvg ? "IFVG" : "-")
 string setupType = modelDir == 0 ? "-" : (mtfMemory and modelDir == (mtfGapBull ? 1 : -1)) ? "Continuation" : "Reversal"
 
 // ---- stop
@@ -2341,8 +2348,9 @@ float tp2Use = na
 float tp3Use = na
 float tp4Use = na
 if tpNeeded
-    tp1 := f_nextAnchor(tpHiPool, tpLoPool, levels, gaps, goLong ? mEntry + mRisk : mEntry - mRisk, goLong)
-    tp1Use := na(tp1) ? (goLong ? mEntry + mRisk : mEntry - mRisk) : tp1
+    float tp1Floor = goLong ? mEntry + mRisk * tp1MinR : mEntry - mRisk * tp1MinR
+    tp1 := f_nextAnchor(tpHiPool, tpLoPool, levels, gaps, tp1Floor, goLong)
+    tp1Use := na(tp1) ? tp1Floor : tp1
     tp2 := f_nextAnchor(tpHiPool, tpLoPool, levels, gaps, tp1Use, goLong)
     tp2Use := na(tp2) ? (goLong ? mEntry + mRisk * 2 : mEntry - mRisk * 2) : tp2
     tp3 := f_nextAnchor(tpHiPool, tpLoPool, levels, gaps, tp2Use, goLong)
@@ -2369,7 +2377,7 @@ f_gradeIdx(string g) =>
     g == "A+" ? 0 : g == "A" ? 1 : g == "A-" ? 2 : g == "B+" ? 3 : g == "B" ? 4 : g == "B-" ? 5 : g == "C" ? 6 : -1
 
 bool chopBlocked = useChopFilter and isChop
-bool gatesOk = sessionOk and cRiskReward and modelDir != 0 and not chopBlocked and (not requireConfirm or cConfirmation) and (not requireAnchored or tpsAnchored)
+bool gatesOk = sessionOk and cRiskReward and modelDir != 0 and not chopBlocked and (not requireConfirm or cConfirmation) and (not requireAnchored or tpsAnchored) and seqOk
 string mGrade = not showModel or not gatesOk ? "No Trade" : f_gradeFromScore(mScore)
 
 // ---- sizing
@@ -2397,7 +2405,13 @@ planExtendBars = input.int(25, "Plan right extension (bars)", minval = 2, maxval
 planLabelGap   = input.int(8, "Plan label gap (bars)", minval = 2, maxval = 40, group = groupPlan)
 planCooldown   = input.int(10, "Bars between trades", minval = 0, maxval = 500, group = groupPlan)
 planMaxKept    = input.int(2, "Plans kept on chart", minval = 1, maxval = 10, group = groupPlan)
-planLineColor  = input.color(color.black, "Plan line color", group = groupPlan)
+planLineColor  = input.color(color.black, "Entry line", group = groupPlan)
+planStopColor  = input.color(#F23645, "Stop line", group = groupPlan)
+planTpColor    = input.color(#089981, "Target lines", group = groupPlan)
+bannerActive   = input.color(#363A45, "Banner while open", group = groupPlan)
+bannerWin      = input.color(#089981, "Banner on a win", group = groupPlan)
+bannerBe       = input.color(#000000, "Banner on breakeven", group = groupPlan)
+bannerLoss     = input.color(#F23645, "Banner on a loss", group = groupPlan)
 zoneProfit     = input.color(#787B86, "Upper zone", group = groupPlan)
 zoneRisk       = input.color(#F23645, "Lower zone", group = groupPlan)
 zoneTransp     = input.int(80, "Zone transparency", minval = 0, maxval = 95, group = groupPlan)
@@ -2422,6 +2436,7 @@ type Trade
     int    hits
     string grade
     string setup
+    string why
     int    contracts
     bool   beMoved
     bool   counted
@@ -2448,6 +2463,14 @@ f_planName(int i, bool beMoved) =>
 f_outcome(int hits) =>
     hits >= (useTp4 ? 4 : 3) ? "Full Win" : hits == 3 ? "Partial (3 TP)" : hits == 2 ? "Partial (2 TP)" : hits == 1 ? "Partial (1 TP)" : "Loss"
 
+f_bannerText(Trade t) =>
+    string head = (t.isLong ? "LONG " : "SHORT ") + t.grade + "  |  " + str.tostring(t.contracts) + " " + (instrMode == "Auto (charted symbol)" ? syminfo.ticker : instrMode)
+    string body = t.setup + " | " + t.why
+    t.active ? head + "\n" + body : head + "\n" + body + "\n" + f_outcome(t.hits)
+
+f_bannerColor(Trade t) =>
+    t.active ? bannerActive : t.hits == 0 ? bannerLoss : t.hits == 1 ? bannerBe : bannerWin
+
 f_delTrade(array<Trade> ts, int i) =>
     Trade t = array.get(ts, i)
     if array.size(t.lnA) > 0
@@ -2461,7 +2484,7 @@ f_delTrade(array<Trade> ts, int i) =>
     array.remove(ts, i)
     0
 
-f_newTrade(bool isLong, float entry, float stop, float p1, float p2, float p3, float p4, string grade, string setup, int contracts) =>
+f_newTrade(bool isLong, float entry, float stop, float p1, float p2, float p3, float p4, string grade, string setup, string why, int contracts) =>
     array<float> px = array.new_float()
     array.push(px, entry)
     array.push(px, stop)
@@ -2479,9 +2502,11 @@ f_newTrade(bool isLong, float entry, float stop, float p1, float p2, float p3, f
         float p = array.get(px, k)
         bool draw = k < n and not na(p)
         float py = draw ? p : entry
-        line a = line.new(time, py, time, py, xloc = xloc.bar_time, color = planLineColor, style = line.style_solid, width = 1)
-        line b = line.new(time, py, time, py, xloc = xloc.bar_time, color = planLineColor, style = line.style_solid, width = 1)
-        label l = label.new(time, py, "", xloc = xloc.bar_time, style = label.style_none, color = color.new(color.black, 100), textcolor = planLineColor, size = size.small, textalign = text.align_center)
+        color lc = k == 0 ? planLineColor : k == 1 ? planStopColor : planTpColor
+        int ls = k <= 1 ? line.style_solid : line.style_dashed
+        line a = line.new(time, py, time, py, xloc = xloc.bar_time, color = lc, style = ls, width = 1)
+        line b = line.new(time, py, time, py, xloc = xloc.bar_time, color = lc, style = ls, width = 1)
+        label l = label.new(time, py, "", xloc = xloc.bar_time, style = label.style_none, color = color.new(color.black, 100), textcolor = lc, size = size.small, textalign = text.align_center)
         array.push(la, a)
         array.push(lb, b)
         array.push(lbl, l)
@@ -2492,8 +2517,10 @@ f_newTrade(bool isLong, float entry, float stop, float p1, float p2, float p3, f
     int rx = f_rightX(planExtendBars)
     box bu = box.new(time, isLong ? far : stop, rx, entry, xloc = xloc.bar_time, border_color = color.new(zoneProfit, 70), bgcolor = color.new(zoneProfit, zoneTransp))
     box bl = box.new(time, entry, rx, isLong ? stop : far, xloc = xloc.bar_time, border_color = color.new(zoneRisk, 70), bgcolor = color.new(zoneRisk, zoneTransp))
-    label le = label.new(time, isLong ? low : high, (isLong ? "Long (" : "Short (") + grade + ") - " + str.tostring(contracts), xloc = xloc.bar_time, style = isLong ? label.style_label_up : label.style_label_down, color = color.new(color.black, 100), textcolor = color.black, size = size.normal)
-    Trade.new(isLong = isLong, entry = entry, stop = stop, px = px, lnA = la, lnB = lb, lbs = lbl, lnEnd = ends, tpHit = hits, bxUpper = bu, bxLower = bl, lbEntry = le, startTime = time, startBar = bar_index, endTime = na, active = true, hits = 0, grade = grade, setup = setup, contracts = contracts, beMoved = false, counted = false, riskGone = false)
+    label le = label.new(time, isLong ? low : high, "", xloc = xloc.bar_time, style = isLong ? label.style_label_up : label.style_label_down, color = bannerActive, textcolor = color.white, size = size.normal, textalign = text.align_left)
+    Trade t = Trade.new(isLong = isLong, entry = entry, stop = stop, px = px, lnA = la, lnB = lb, lbs = lbl, lnEnd = ends, tpHit = hits, bxUpper = bu, bxLower = bl, lbEntry = le, startTime = time, startBar = bar_index, endTime = na, active = true, hits = 0, grade = grade, setup = setup, why = why, contracts = contracts, beMoved = false, counted = false, riskGone = false)
+    label.set_text(le, f_bannerText(t))
+    t
 
 f_layoutTrade(Trade t) =>
     int rx = f_rightX(planExtendBars)
@@ -2522,6 +2549,10 @@ f_updateTrade(Trade t) =>
                     array.set(t.tpHit, k, true)
                     array.set(t.lnEnd, k + 2, time)
                     t.hits := k + 1
+                    line.set_style(array.get(t.lnA, k + 2), line.style_solid)
+                    line.set_style(array.get(t.lnB, k + 2), line.style_solid)
+                    line.set_width(array.get(t.lnA, k + 2), 2)
+                    line.set_width(array.get(t.lnB, k + 2), 2)
                     if k == 0
                         t.stop := t.entry
                         t.beMoved := true
@@ -2538,10 +2569,9 @@ f_updateTrade(Trade t) =>
                 for k = 0 to 5
                     if na(array.get(t.lnEnd, k))
                         array.set(t.lnEnd, k, time)
-            label.set_text(t.lbEntry, (t.isLong ? "Long (" : "Short (") + t.grade + ") - " + str.tostring(t.contracts) + " - " + f_outcome(t.hits))
-            // faded green if it closed beyond breakeven, black if it gave TP1 back
-            // at breakeven, faded red on a straight loss
-            label.set_textcolor(t.lbEntry, t.hits == 0 ? color.new(#F23645, 25) : t.hits == 1 ? color.new(color.black, 0) : color.new(#089981, 25))
+            label.set_text(t.lbEntry, f_bannerText(t))
+            label.set_color(t.lbEntry, f_bannerColor(t))
+            label.set_textcolor(t.lbEntry, color.white)
     t.active
 
 f_capPct(Trade t) =>
@@ -2576,7 +2606,7 @@ if array.size(trades) > 0
             anyActive := true
 
 if showPlanner and showModel and planGradeOk and not anyActive and (na(lastTradeBar) or bar_index - lastTradeBar >= planCooldown) and not na(mRisk) and mRisk > 0 and barstate.isconfirmed
-    array.push(trades, f_newTrade(goLong, mEntry, mStop, tp1Use, tp2Use, tp3Use, tp4Use, mGrade, setupType, mContracts))
+    array.push(trades, f_newTrade(goLong, mEntry, mStop, tp1Use, tp2Use, tp3Use, tp4Use, mGrade, setupType, whyText, mContracts))
     lastTradeBar := bar_index
     while array.size(trades) > planMaxKept
         f_delTrade(trades, 0)
@@ -2607,6 +2637,8 @@ else if modelDir == 0
     blockReason := "no direction yet"
 else if requireConfirm and not cConfirmation
     blockReason := "no IFVG / breaker"
+else if not seqOk
+    blockReason := "out of sequence"
 else if not cRiskReward
     blockReason := na(mRR) ? "no target found" : "RR " + str.tostring(mRR, "#.#") + " < " + str.tostring(minRR, "#.#")
 else if requireAnchored and not tp1Anchored
