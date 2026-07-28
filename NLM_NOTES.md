@@ -99,6 +99,37 @@ All four are settings, so change them without touching code:
 3. News — **built-in recurring plus two custom windows**.
 4. HTF gap filter — **distance + respected + first/last combined** (`htfDistAtr`, `htfNeedRespect`, `gapFirstLast`).
 
+## The historical-buffer error — root cause
+
+```
+Error on bar 24317: The requested historical offset (4474) is beyond the
+historical buffer's limit (4473).   at f_gapLine():966 / f_layoutLiq():1256
+```
+
+**A past `bar_index` coordinate is capped by `max_bars_back`. A `bar_time`
+coordinate is not.** When drawings moved to `xloc.bar_index` to kill the scroll
+drift, every long-lived object became a ticking clock: a BSL ray created 24,000
+bars ago still handed its start index to `line.set_xy1`, and Pine refused. Cutting
+`max_bars_back` from 5000 to 500 did not cause this — it just made it fire sooner.
+
+The fix is a split by direction, not a blanket choice:
+
+- **Anchors reaching into the past** — gap and breaker box left edges, ray starts,
+  trade plan starts — are back on `xloc.bar_time`. Timestamps have no buffer limit,
+  so a ray can be a week old and still draw.
+- **Anchors reaching only forward** — the session and profile labels at
+  `bar_index + 14` — stay on `xloc.bar_index`. A *future* offset has no buffer
+  limit and no projection, so these keep the drift fix. That was the real drift all
+  along: labels parked on a future timestamp, not the boxes.
+
+A regression check now fails the build if any `xloc.bar_index` site appears outside
+the forward-looking label anchors.
+
+Two things came out of the revert for free: gap boxes anchor on the **open time of
+the oldest of the three candles**, which is exactly "start where the first candle of
+the gap starts" with no timeframe arithmetic to get wrong; and unswept BSL/SSL rays
+now expire after 5 days, since a 24,000-bar-old untouched ray is not information.
+
 ## "Works for a few seconds then goes away" — the memory/time limit
 
 That symptom is not a compile error. The script compiles, starts drawing, and is then killed by
