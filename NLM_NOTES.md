@@ -99,6 +99,35 @@ All four are settings, so change them without touching code:
 3. News — **built-in recurring plus two custom windows**.
 4. HTF gap filter — **distance + respected + first/last combined** (`htfDistAtr`, `htfNeedRespect`, `gapFirstLast`).
 
+## The 1m runtime error
+
+You did not send the message text, so this is elimination rather than diagnosis. The single
+highest-risk construct in the script was the CISD walk-back: `close[i]` / `open[i]` with `i`
+computed at runtime inside a `while` loop. Indexing a series with a runtime-computed offset is
+the classic trigger for *"Pine cannot determine the referencing length of a series"*, which is
+thrown at **runtime** and pulls the indicator off the chart — matching "gives an error and goes
+off my chart".
+
+It is gone. The CISD level is now carried forward bar by bar: on every bar the script remembers
+the open of the first candle of the consecutive same-direction streak running into it. Identical
+definition, no dynamic indexing anywhere in the script, and faster. A scan confirms zero
+series-with-computed-offset accesses remain.
+
+Also hardened: a seconds timeframe is now only ever requested when the chart itself is at or
+below it. Even with the 30s feed switched on by mistake on a 1m chart, the script asks for the
+chart's own timeframe, which always resolves.
+
+**If the error survives this, send me the exact message.** It appears under the indicator name on
+the chart, or in the Pine Editor console. One line of it and I can name the cause instead of
+narrowing.
+
+## 30s charts were silently dead
+
+`request.security_lower_tf` returns an **empty array** when the requested timeframe is above the
+chart's. The base engine asks for 1m data, so on a 30s chart it got nothing back and every
+session level, PDH/PDL, and the whole volume profile silently vanished — no error, just absence.
+The calculation timeframe is now clamped to the chart, so 30s and 1m both work.
+
 ## The reason no trade ever printed
 
 `input.session("0000-0000")` was used as an "off" sentinel for the two custom news windows.

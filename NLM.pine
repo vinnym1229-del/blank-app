@@ -73,9 +73,13 @@ maxOldUnsweptSessionLevels = input.int(16, "Max old unswept Asia/London levels",
 bool showHistoricalProfileLevels = historicalLevelMode != "Latest only"
 bool showHistoricalProfileLabels = historicalLevelMode == "All faded + labels"
 
-int calcSeconds = timeframe.in_seconds(calcTimeframe)
-int calcMs = math.max(1000, calcSeconds * 1000)
 int chartSeconds = timeframe.in_seconds(timeframe.period)
+// request.security_lower_tf yields an empty array when the requested timeframe is
+// above the chart's, which would silently disable every session level on a 30s
+// chart. Clamp the calculation timeframe to the chart.
+simple string calcTfEff = timeframe.in_seconds(calcTimeframe) > chartSeconds ? timeframe.period : calcTimeframe
+int calcSeconds = timeframe.in_seconds(calcTfEff)
+int calcMs = math.max(1000, calcSeconds * 1000)
 int chartMs = math.max(1000, chartSeconds * 1000)
 int dayAnchorMs = dailyResetHour * 60 * 60 * 1000
 
@@ -614,7 +618,7 @@ f_updateLabels() =>
             label.set_textalign(intradayLowLabel, text.align_left)
     0
 
-[ltfTime, ltfHigh, ltfLow, ltfClose, ltfHlc3, ltfVolume, ltfInAsia, ltfInLondon, ltfInNewYork, ltfInOvernight, ltfNyKey, ltfTvDayKey, ltfWeekKey] = request.security_lower_tf(syminfo.tickerid, calcTimeframe, [time, high, low, close, hlc3, volume, not na(time(calcTimeframe, f_session(asiaSession), sessionTimezone)), not na(time(calcTimeframe, f_session(londonSession), sessionTimezone)), not na(time(calcTimeframe, f_session(newYorkSession), sessionTimezone)), not na(time(calcTimeframe, f_session(overnightSession), sessionTimezone)), f_nyKey(time), time("D"), time("W")], ignore_invalid_timeframe = true, calc_bars_count = lowerTfBarsRequested)
+[ltfTime, ltfHigh, ltfLow, ltfClose, ltfHlc3, ltfVolume, ltfInAsia, ltfInLondon, ltfInNewYork, ltfInOvernight, ltfNyKey, ltfTvDayKey, ltfWeekKey] = request.security_lower_tf(syminfo.tickerid, calcTfEff, [time, high, low, close, hlc3, volume, not na(time(calcTfEff, f_session(asiaSession), sessionTimezone)), not na(time(calcTfEff, f_session(londonSession), sessionTimezone)), not na(time(calcTfEff, f_session(newYorkSession), sessionTimezone)), not na(time(calcTfEff, f_session(overnightSession), sessionTimezone)), f_nyKey(time), time("D"), time("W")], ignore_invalid_timeframe = true, calc_bars_count = lowerTfBarsRequested)
 
 bool profileIsOvernight = profileRange == "Overnight"
 bool profileIsNySession = profileRange == "NY session"
@@ -1639,7 +1643,10 @@ f_resolve(simple string tf, int st, float so, float sh, float sl, float sc) =>
     bool ok  = tfs >= chartSeconds
     [ok, nat ? time : st, nat ? open : so, nat ? high : sh, nat ? low : sl, nat ? close : sc]
 
-[q0t, q0o, q0h, q0l, q0c] = f_feed(enable30s ? fvgTf0 : timeframe.period)
+// a seconds timeframe is only ever requested when the chart itself is at or
+// below it; otherwise we ask for the chart's own timeframe, which always resolves
+simple string tf0Eff = enable30s and timeframe.in_seconds(fvgTf0) >= chartSeconds ? fvgTf0 : timeframe.period
+[q0t, q0o, q0h, q0l, q0c] = f_feed(tf0Eff)
 [q1t, q1o, q1h, q1l, q1c] = f_feed(fvgTf1)
 [q2t, q2o, q2h, q2l, q2c, atr5ref] = f_feedAtr(fvgTf2)
 [q3t, q3o, q3h, q3l, q3c] = f_feed(fvgTf3)
@@ -1828,7 +1835,6 @@ groupBB = "Breaker blocks"
 showBB        = input.bool(true, "Show breaker blocks", group = groupBB)
 bbSwingLen    = input.int(15, "Swing length for BOS / CHoCH", minval = 4, maxval = 60, group = groupBB)
 bbMaxBoxes    = input.int(6, "Max breaker boxes", minval = 1, maxval = 20, group = groupBB)
-bbCisdLook    = input.int(50, "Max candles walked back for CISD", minval = 3, maxval = 200, group = groupBB)
 bbMaxWidth    = input.int(120, "Max breaker width (bars)", minval = 20, maxval = 600, group = groupBB, tooltip = "The leg between two swings can be hundreds of bars on a fast chart. The box price range is still the full swing-low body to swing-high body; only how far LEFT it is drawn is capped.")
 bbShowCisd    = input.bool(true, "Draw the CISD line until confirmed", group = groupBB)
 bbFill        = input.color(#B2B5BE, "Breaker fill (light grey)", group = groupBB)
@@ -1878,6 +1884,20 @@ var float legTroughLowBody = na
 var int   legTroughLowTime = na
 var int   legTroughLowBar = na
 
+// CISD level = the open of the FIRST candle of the consecutive same-direction
+// streak running into the current bar. Carried forward bar by bar so no series
+// is ever indexed with a runtime-computed offset.
+var float dnStreakOpen = na
+var float upStreakOpen = na
+if close < open
+    dnStreakOpen := close[1] < open[1] and not na(dnStreakOpen) ? dnStreakOpen : open
+else
+    dnStreakOpen := na
+if close > open
+    upStreakOpen := close[1] > open[1] and not na(upStreakOpen) ? upStreakOpen : open
+else
+    upStreakOpen := na
+
 float bbPh = ta.pivothigh(high, bbSwingLen, bbSwingLen)
 float bbPl = ta.pivotlow(low, bbSwingLen, bbSwingLen)
 if not na(bbPh)
@@ -1890,19 +1910,6 @@ if not na(bbPl)
     rollSwingLowTime := time[bbSwingLen]
     rollSwingLowBody := math.min(open[bbSwingLen], close[bbSwingLen])
     rollSwingLowBar := bar_index - bbSwingLen
-
-// the CISD level is the open of the first candle of the streak that broke structure
-f_cisdLevel(bool downStreak, int maxLook) =>
-    float lvl = open
-    int i = 0
-    bool go = true
-    while go and i < maxLook
-        if downStreak ? close[i] < open[i] : close[i] > open[i]
-            lvl := open[i]
-            i += 1
-        else
-            go := false
-    lvl
 
 f_delBrk(array<Brk> bs, int i) =>
     Brk b = array.get(bs, i)
@@ -1949,7 +1956,7 @@ bool chochUp   = bbBias == "Bearish" and not na(legOriginHigh) and close > legOr
 
 if chochDown
     if showBB and not na(legPeakHighBody) and not na(legOriginLowBody)
-        f_addBrk(brks, math.max(legPeakHighBody, legOriginLowBody), math.min(legPeakHighBody, legOriginLowBody), math.max(math.max(legOriginLowBar, legPeakHighBar), bar_index - bbMaxWidth), false, f_cisdLevel(true, bbCisdLook), true)
+        f_addBrk(brks, math.max(legPeakHighBody, legOriginLowBody), math.min(legPeakHighBody, legOriginLowBody), math.max(math.max(legOriginLowBar, legPeakHighBar), bar_index - bbMaxWidth), false, nz(dnStreakOpen, open), true)
         lastBrkBar := bar_index
         lastBrkBull := false
     bbBias := "None"
@@ -1960,7 +1967,7 @@ if chochDown
 
 if chochUp
     if showBB and not na(legTroughLowBody) and not na(legOriginHighBody)
-        f_addBrk(brks, math.max(legTroughLowBody, legOriginHighBody), math.min(legTroughLowBody, legOriginHighBody), math.max(math.max(legOriginHighBar, legTroughLowBar), bar_index - bbMaxWidth), true, f_cisdLevel(false, bbCisdLook), false)
+        f_addBrk(brks, math.max(legTroughLowBody, legOriginHighBody), math.min(legTroughLowBody, legOriginHighBody), math.max(math.max(legOriginHighBar, legTroughLowBar), bar_index - bbMaxWidth), true, nz(upStreakOpen, open), false)
         lastBrkBar := bar_index
         lastBrkBull := true
     bbBias := "None"
