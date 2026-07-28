@@ -99,6 +99,31 @@ All four are settings, so change them without touching code:
 3. News — **built-in recurring plus two custom windows**.
 4. HTF gap filter — **distance + respected + first/last combined** (`htfDistAtr`, `htfNeedRespect`, `gapFirstLast`).
 
+## The reason no trade ever printed
+
+`input.session("0000-0000")` was used as an "off" sentinel for the two custom news windows.
+TradingView does **not** read that as an empty session — midnight to midnight is the **full
+24-hour day**. Both custom windows therefore matched every bar, `inNews` was permanently true,
+`sessionOk` permanently false, and every gate downstream of it failed. That is why the panel said
+`Blocked by: news window` at 01:01, and why the whole model was inert.
+
+Every news window now has its own explicit on/off switch; the two custom windows ship off. No
+session string is ever used as a sentinel again.
+
+## The 30s feed is off by default
+
+`request.security` to a seconds resolution errors outright on some symbols and account plans, and
+it cannot return sub-chart resolution anyway — on a 1m chart it was pure cost for no data. It now
+requests the chart's own timeframe when disabled, so nothing is asked for that cannot be served.
+Turn it on only on a 30s or lower chart.
+
+## Touched gaps are never pruned
+
+A 5m FVG that price has already tapped is the setup, not clutter. Three separate mechanisms could
+delete one: the first-and-last-of-leg filter, the higher-timeframe overlap prune, and the hard
+ceiling. All three now treat a gap as protected once it has been touched, respected, inverted or
+turned into a BPR, and the ceiling drops untouched gaps first.
+
 ## Gap alignment + why nothing was printing
 
 **Boxes started too far right.** The left edge anchored at the bar where the *middle* candle

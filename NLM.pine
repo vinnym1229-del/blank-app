@@ -985,11 +985,19 @@ asiaTrading  = input.bool(true, "Also trade the Asia window", group = groupGate)
 asiaTradeSes = input.session("2000-2300", "Asia trading window", group = groupGate)
 blockMonday  = input.bool(false, "Block Mondays entirely", group = groupGate, tooltip = "Off by default: Mondays are size-reduced rather than blocked.")
 useNewsBlock = input.bool(true, "Block news windows", group = groupGate)
+// Each window has its own switch. Never use an empty-looking session string as an
+// "off" sentinel: TradingView reads 0000-0000 as the FULL 24-hour day, which
+// silently blocks every bar.
+news1On = input.bool(true, "Block 08:30 news", group = groupGate)
 news1 = input.session("0828-0836", "News window 1", group = groupGate)
+news2On = input.bool(true, "Block 10:00 news", group = groupGate)
 news2 = input.session("0958-1005", "News window 2", group = groupGate)
+news3On = input.bool(true, "Block 14:00 news", group = groupGate)
 news3 = input.session("1358-1405", "News window 3", group = groupGate)
-news4 = input.session("0000-0000", "Custom news window 1", group = groupGate)
-news5 = input.session("0000-0000", "Custom news window 2", group = groupGate)
+news4On = input.bool(false, "Block custom window 1", group = groupGate)
+news4 = input.session("0828-0836", "Custom news window 1", group = groupGate)
+news5On = input.bool(false, "Block custom window 2", group = groupGate)
+news5 = input.session("0828-0836", "Custom news window 2", group = groupGate)
 
 f_inSes(string ses) =>
     not na(time(timeframe.period, f_session(ses), sessionTimezone))
@@ -998,7 +1006,7 @@ bool inRth      = f_inSes(rthSession)
 bool inAsiaTrad = asiaTrading and f_inSes(asiaTradeSes)
 bool isMonday   = dayofweek(time, sessionTimezone) == dayofweek.monday
 bool isFriday   = dayofweek(time, sessionTimezone) == dayofweek.friday
-bool inNews     = useNewsBlock and (f_inSes(news1) or f_inSes(news2) or f_inSes(news3) or f_inSes(news4) or f_inSes(news5))
+bool inNews     = useNewsBlock and ((news1On and f_inSes(news1)) or (news2On and f_inSes(news2)) or (news3On and f_inSes(news3)) or (news4On and f_inSes(news4)) or (news5On and f_inSes(news5)))
 bool sessionOk  = (inRth or inAsiaTrad) and not inNews and not (blockMonday and isMonday)
 
 // ------------------------------------------------------------------ chop filter
@@ -1357,6 +1365,7 @@ while f_countLiq(liqs, false) > liqMaxUnswept and liqGuard < 100
 // =============================================================================
 groupFvg = "FVG / IFVG / BPR"
 showFvg        = input.bool(true, "Show gaps", group = groupFvg)
+enable30s = input.bool(false, "Enable the 30s feed", group = groupFvg, tooltip = "Only works on a 30s or lower chart - request.security cannot return sub-chart resolution. Off by default because a seconds request errors outright on some symbols and plans.")
 fvgTf0 = input.timeframe("30S", "LTF a (only after a sweep, only if no 1m gap)", group = groupFvg)
 fvgTf1 = input.timeframe("1", "LTF b", group = groupFvg)
 fvgTf2 = input.timeframe("5", "MTF a", group = groupFvg)
@@ -1588,7 +1597,7 @@ f_detectGap(array<Gap> gs, Bar3 b, int tfSec, string tfName, int rank, bool allo
                     for i = array.size(gs) - 1 to 0
                         if i < array.size(gs)
                             Gap g = array.get(gs, i)
-                            if g.rank == rank and g.legId == curLeg and g.legIdx != 0 and g.legIdx != newest and not g.respected and not g.inverted and not g.bpr
+                            if g.rank == rank and g.legId == curLeg and g.legIdx != 0 and g.legIdx != newest and not g.touched and not g.respected and not g.inverted and not g.bpr
                                 f_delGap(gs, i)
     0
 
@@ -1630,7 +1639,7 @@ f_resolve(simple string tf, int st, float so, float sh, float sl, float sc) =>
     bool ok  = tfs >= chartSeconds
     [ok, nat ? time : st, nat ? open : so, nat ? high : sh, nat ? low : sl, nat ? close : sc]
 
-[q0t, q0o, q0h, q0l, q0c] = f_feed(fvgTf0)
+[q0t, q0o, q0h, q0l, q0c] = f_feed(enable30s ? fvgTf0 : timeframe.period)
 [q1t, q1o, q1h, q1l, q1c] = f_feed(fvgTf1)
 [q2t, q2o, q2h, q2l, q2c, atr5ref] = f_feedAtr(fvgTf2)
 [q3t, q3o, q3h, q3l, q3c] = f_feed(fvgTf3)
@@ -1742,7 +1751,7 @@ if showFvg
     if new5
         f_detectGap(gaps, buf5, tfSec5, f_tfLabel(fvgTf5), 5, ok5, legDir, legId, legIdx)
     if new0
-        f_detectGap(gaps, buf0, tfSec0, f_tfLabel(fvgTf0), 0, ok0 and sweepFresh30 and f_countGapsTf(gaps, tfSec1) == 0, legDir, legId, legIdx)
+        f_detectGap(gaps, buf0, tfSec0, f_tfLabel(fvgTf0), 0, enable30s and ok0 and sweepFresh30 and f_countGapsTf(gaps, tfSec1) == 0, legDir, legId, legIdx)
 
 // ---- per-bar gap maintenance. Everything here is O(gaps); the O(gaps^2)
 // overlap pass and the redraw both run only when they can change something.
@@ -1780,8 +1789,10 @@ if showFvg and gapSetChanged and array.size(gaps) > 1
         if i < array.size(gaps)
             Gap g = array.get(gaps, i)
             bool drop = false
+            // a gap price has already tapped is the setup itself - never prune it
+            bool proven = g.touched or g.respected or g.inverted or g.bpr
             for j = 0 to array.size(gaps) - 1
-                if j != i and not drop
+                if j != i and not drop and not proven
                     Gap o = array.get(gaps, j)
                     if o.rank > g.rank and g.top >= o.bot and g.bot <= o.top and (gapPruneAll or f_sameTier(g.rank, o.rank))
                         drop := true
@@ -1795,7 +1806,8 @@ while array.size(gaps) > maxTotalGaps and gapCapGuard < 100
     int worstKey = na
     for i = 0 to array.size(gaps) - 1
         Gap g = array.get(gaps, i)
-        int key = g.rank * 1000000 + g.bornBar
+        // untouched first, then lowest timeframe, then oldest
+        int key = (g.touched or g.respected or g.inverted or g.bpr ? 100000000 : 0) + g.rank * 1000000 + g.bornBar
         if worstIdx == -1 or key < worstKey
             worstIdx := i
             worstKey := key
