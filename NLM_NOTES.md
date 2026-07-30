@@ -125,6 +125,33 @@ inverts coming back out of it. That order is now enforced —
 than wonder. `Enforce sweep -> MTF gap -> confirmation ORDER` in the Model group
 turns it off if it proves too strict.
 
+## Styling audit against your spec
+
+Audited the code line by line against every point in your styling brief rather than
+assuming earlier rounds had covered it. One item genuinely was not done.
+
+**Profile levels were still banners.** `VAH Weekly`, `POC Daily` and the rest drew as
+solid coloured bubbles — the exact "massive banner" style you said should be reserved
+for the overnight session highs and lows. They now draw like `$$$` and `BSL`: a dashed
+line broken near the right edge with the name sitting in the break, no bubble, text in
+the level's own colour so Daily and Weekly stay distinguishable.
+
+A check now enforces this: any bubble-style label that is not a session high/low fails
+the build. The six that remain are exactly the ones you wanted kept — Asia, London,
+PDH/PDL, PWH/PWL and the intraday IDH/IDL.
+
+Everything else in the brief was already in place and verified by reading the code:
+FVG label centre-right inside the box reading `1m FVG`, black outline with dark grey
+fill, CE midline and text green or red by direction, white fill and `1m IFVG` once
+inverted, light grey `1m BB`, transparency rising with timeframe, BSL/SSL black with
+the label centred in the line break turning to `$$$` and freezing at the sweep candle,
+`BSL+VAH` / `SSL+POC` tagging, SMT wick to wick with the label on the line, and no
+CHoCH label anywhere since the CHoCH close *is* the breaker.
+
+**Plan levels now name themselves fully:** `ENTRY 27721.50`, `STOP LOSS 27601.25`,
+`TP1 / BE 50% 27812.00`, and each target appends `HIT` the moment it is reached, on top
+of turning solid and thick.
+
 ## Follow-up review of the sequence gate
 
 The gate as first written was nearly unsatisfiable. `mtfGapBar` was stamped with

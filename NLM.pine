@@ -1036,6 +1036,8 @@ vpShowDaily  = input.bool(true, "Show Daily POC / VAH / VAL", group = groupVp)
 vpShowWeekly = input.bool(true, "Show Weekly POC / VAH / VAL", group = groupVp)
 vpDailyColor = input.color(#A7C957, "Daily color", group = groupVp)
 vpWeeklyColor = input.color(#E040FB, "Weekly color", group = groupVp)
+vpLabelBack  = input.int(12, "Profile label position (bars left of price)", minval = 2, maxval = 100, group = groupVp)
+vpLabelGap   = input.int(7, "Profile label gap width (bars)", minval = 2, maxval = 40, group = groupVp)
 
 var array<float> vpDayP = array.new_float()
 var array<float> vpDayV = array.new_float()
@@ -1057,39 +1059,59 @@ var float wPoc = na
 var float wVah = na
 var float wVal = na
 
-var array<line>  vpLines  = array.new<line>()
-var array<label> vpLabels = array.new<label>()
+type VpLvl
+    line   a
+    line   b
+    label  lb
+    float  price
+    int    startTime
 
-f_clearVp(array<line> lns, array<label> lbs) =>
-    if array.size(lns) > 0
-        for i = array.size(lns) - 1 to 0
-            line.delete(array.get(lns, i))
-            array.remove(lns, i)
-    if array.size(lbs) > 0
-        for i = array.size(lbs) - 1 to 0
-            label.delete(array.get(lbs, i))
-            array.remove(lbs, i)
+var array<VpLvl> vpLevels = array.new<VpLvl>()
+
+f_clearVp(array<VpLvl> vs) =>
+    if array.size(vs) > 0
+        for i = array.size(vs) - 1 to 0
+            VpLvl v = array.get(vs, i)
+            line.delete(v.a)
+            line.delete(v.b)
+            label.delete(v.lb)
+            array.remove(vs, i)
     0
 
-f_drawVp(array<line> lns, array<label> lbs, string name, float price, color col, int startTime) =>
+// dashed line with a break near the right edge, name sitting in the break
+f_layoutVp(VpLvl v) =>
+    int x1 = na(v.startTime) ? time : v.startTime
+    int mid = time - vpLabelBack * chartMs
+    int half = math.max(chartMs, int(vpLabelGap * chartMs / 2))
+    int aEnd = math.max(x1, mid - half)
+    line.set_xy1(v.a, x1, v.price)
+    line.set_xy2(v.a, aEnd, v.price)
+    line.set_xy1(v.b, math.max(aEnd, mid + half), v.price)
+    line.set_xy2(v.b, time, v.price)
+    label.set_xy(v.lb, mid, v.price)
+    0
+
+f_drawVp(array<VpLvl> vs, string name, float price, color col, int startTime) =>
     if not na(price)
         int x1 = na(startTime) ? time : startTime
-        line ln = line.new(x1, price, f_lineRightX(x1), price, xloc = xloc.bar_time, extend = extend.right, color = col, style = line.style_dashed, width = 1)
-        label lb = label.new(f_labelXi(), price, showPricesInLabels ? name + " " + f_priceText(price) : name, xloc = xloc.bar_index, style = label.style_label_left, color = color.new(col, 0), textcolor = color.black, size = size.small, textalign = text.align_left)
-        array.push(lns, ln)
-        array.push(lbs, lb)
+        line a = line.new(x1, price, x1, price, xloc = xloc.bar_time, color = col, style = line.style_dashed, width = 1)
+        line b = line.new(x1, price, x1, price, xloc = xloc.bar_time, extend = extend.right, color = col, style = line.style_dashed, width = 1)
+        label lb = label.new(x1, price, showPricesInLabels ? name + " " + f_priceText(price) : name, xloc = xloc.bar_time, style = label.style_none, color = color.new(color.black, 100), textcolor = col, size = size.small, textalign = text.align_center)
+        VpLvl v = VpLvl.new(a = a, b = b, lb = lb, price = price, startTime = startTime)
+        array.push(vs, v)
+        f_layoutVp(v)
     0
 
-f_redrawVp(array<line> lns, array<label> lbs) =>
-    f_clearVp(lns, lbs)
+f_redrawVp(array<VpLvl> vs) =>
+    f_clearVp(vs)
     if vpShowDaily
-        f_drawVp(lns, lbs, "POC Daily", dPoc, vpDailyColor, vpDayStart)
-        f_drawVp(lns, lbs, "VAH Daily", dVah, vpDailyColor, vpDayStart)
-        f_drawVp(lns, lbs, "VAL Daily", dVal, vpDailyColor, vpDayStart)
+        f_drawVp(vs, "POC Daily", dPoc, vpDailyColor, vpDayStart)
+        f_drawVp(vs, "VAH Daily", dVah, vpDailyColor, vpDayStart)
+        f_drawVp(vs, "VAL Daily", dVal, vpDailyColor, vpDayStart)
     if vpShowWeekly
-        f_drawVp(lns, lbs, "POC Weekly", wPoc, vpWeeklyColor, vpWkStart)
-        f_drawVp(lns, lbs, "VAH Weekly", wVah, vpWeeklyColor, vpWkStart)
-        f_drawVp(lns, lbs, "VAL Weekly", wVal, vpWeeklyColor, vpWkStart)
+        f_drawVp(vs, "POC Weekly", wPoc, vpWeeklyColor, vpWkStart)
+        f_drawVp(vs, "VAH Weekly", wVah, vpWeeklyColor, vpWkStart)
+        f_drawVp(vs, "VAL Weekly", wVal, vpWeeklyColor, vpWkStart)
     0
 
 // Re-walks the intrabar arrays the base engine already fetched, so this costs no
@@ -1144,10 +1166,10 @@ if ltfCount > 0
         f_pushProfile(vpWkP, vpWkV, p, v, vpShowWeekly or useProfileConfluence)
 
 if vpRolled
-    f_redrawVp(vpLines, vpLabels)
-if barstate.islast and array.size(vpLabels) > 0
-    for i = 0 to array.size(vpLabels) - 1
-        label.set_x(array.get(vpLabels, i), f_labelXi())
+    f_redrawVp(vpLevels)
+if barstate.islast and array.size(vpLevels) > 0
+    for i = 0 to array.size(vpLevels) - 1
+        f_layoutVp(array.get(vpLevels, i))
 
 // tag helper used by BSL/SSL: "BSL+VAH", "SSL+POC" ...
 f_vpTag(float px) =>
@@ -2411,6 +2433,7 @@ tp3Alloc       = input.float(10, "TP3 allocation %", minval = 0, maxval = 100, g
 tp4Alloc       = input.float(5, "TP4 allocation %", minval = 0, maxval = 100, group = groupPlan)
 planExtendBars = input.int(25, "Plan right extension (bars)", minval = 2, maxval = 200, group = groupPlan)
 planLabelGap   = input.int(8, "Plan label gap (bars)", minval = 2, maxval = 40, group = groupPlan)
+planShowPrices = input.bool(true, "Show the price on each plan level", group = groupPlan)
 planCooldown   = input.int(10, "Bars between trades", minval = 0, maxval = 500, group = groupPlan)
 planMaxKept    = input.int(2, "Plans kept on chart", minval = 1, maxval = 10, group = groupPlan)
 planLineColor  = input.color(color.black, "Entry line", group = groupPlan)
@@ -2465,8 +2488,10 @@ var array<float> stCap  = array.new_float(9, 0.0)
 f_alloc(int k) =>
     k == 0 ? tp1Alloc : k == 1 ? tp2Alloc : k == 2 ? tp3Alloc : tp4Alloc
 
-f_planName(int i, bool beMoved) =>
-    i == 0 ? "Entry" : i == 1 ? (beMoved ? "BE" : "Stop Loss") : i == 2 ? "TP1/BE " + str.tostring(tp1Alloc, "#") + "%" : i == 3 ? "TP2 " + str.tostring(tp2Alloc, "#") + "%" : i == 4 ? "TP3 " + str.tostring(tp3Alloc, "#") + "%" : "TP4 " + str.tostring(tp4Alloc, "#") + "%"
+f_planName(int i, bool beMoved, float px, bool hit) =>
+    string nm = i == 0 ? "ENTRY" : i == 1 ? (beMoved ? "BREAKEVEN" : "STOP LOSS") : i == 2 ? "TP1 / BE  " + str.tostring(tp1Alloc, "#") + "%" : i == 3 ? "TP2  " + str.tostring(tp2Alloc, "#") + "%" : i == 4 ? "TP3  " + str.tostring(tp3Alloc, "#") + "%" : "TP4  " + str.tostring(tp4Alloc, "#") + "%"
+    string mark = hit ? "  HIT" : ""
+    planShowPrices and not na(px) ? nm + "  " + f_priceText(px) + mark : nm + mark
 
 f_outcome(int hits) =>
     hits >= (useTp4 ? 4 : 3) ? "Full Win" : hits == 3 ? "Partial (3 TP)" : hits == 2 ? "Partial (2 TP)" : hits == 1 ? "Partial (1 TP)" : "Loss"
@@ -2538,7 +2563,9 @@ f_layoutTrade(Trade t) =>
         if k < n and not na(p)
             int e = array.get(t.lnEnd, k)
             int x2 = na(e) ? (t.active ? rx : t.endTime) : e
-            f_gapLine(array.get(t.lnA, k), array.get(t.lnB, k), array.get(t.lbs, k), k == 1 ? t.stop : p, t.startTime, x2, planLabelGap, f_planName(k, t.beMoved))
+            float lvlPx = k == 1 ? t.stop : p
+            bool lvlHit = k >= 2 and array.size(t.tpHit) > k - 2 and array.get(t.tpHit, k - 2)
+            f_gapLine(array.get(t.lnA, k), array.get(t.lnB, k), array.get(t.lbs, k), lvlPx, t.startTime, x2, planLabelGap, f_planName(k, t.beMoved, lvlPx, lvlHit))
     int bx2 = t.active ? rx : t.endTime
     if not (t.riskGone and not t.isLong)
         box.set_right(t.bxUpper, bx2)
