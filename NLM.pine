@@ -2273,15 +2273,23 @@ bool inHtfGap     = f_priceInGapRank(gaps, close, 4, 5) or f_priceInGapTf(gaps, 
 bool nearProfile  = f_near(close, dVah, profileToleranceTicks) or f_near(close, dVal, profileToleranceTicks) or f_near(close, dPoc, profileToleranceTicks) or f_near(close, wVah, profileToleranceTicks) or f_near(close, wVal, profileToleranceTicks) or f_near(close, wPoc, profileToleranceTicks)
 bool inMtfGap     = f_priceInGapRank(gaps, close, 2, 3)
 
+// mtfGapBar is the bar this VISIT into the gap began - the "pulled in" event.
+// Stamping it with bar_index every bar price stays inside would push it past the
+// confirmation bar and make the sequence check unsatisfiable while price is still
+// in the gap. mtfLastInBar separately tracks how recently price was inside.
 var int  mtfGapBar = na
+var int  mtfLastInBar = na
 var bool mtfGapBull = false
-if inMtfGap and array.size(gaps) > 0
-    for i = 0 to array.size(gaps) - 1
-        Gap g = array.get(gaps, i)
-        if (g.rank == 2 or g.rank == 3) and close <= g.top and close >= g.bot
-            mtfGapBar := bar_index
-            mtfGapBull := g.bull
-bool mtfMemory = not na(mtfGapBar) and bar_index - mtfGapBar <= mtfMemoryBars
+if inMtfGap
+    if na(mtfLastInBar) or bar_index - mtfLastInBar > 1
+        mtfGapBar := bar_index
+    mtfLastInBar := bar_index
+    if array.size(gaps) > 0
+        for i = 0 to array.size(gaps) - 1
+            Gap g = array.get(gaps, i)
+            if (g.rank == 2 or g.rank == 3) and close <= g.top and close >= g.bot
+                mtfGapBull := g.bull
+bool mtfMemory = not na(mtfLastInBar) and bar_index - mtfLastInBar <= mtfMemoryBars
 
 bool freshIfvg = not na(lastIfvgBar) and bar_index - lastIfvgBar <= confirmWindow and lastIfvgRank <= 1
 bool freshBrk  = not na(lastBrkConfirmedBar) and bar_index - lastBrkConfirmedBar <= confirmWindow

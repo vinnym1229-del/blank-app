@@ -125,6 +125,19 @@ inverts coming back out of it. That order is now enforced —
 than wonder. `Enforce sweep -> MTF gap -> confirmation ORDER` in the Model group
 turns it off if it proves too strict.
 
+## Follow-up review of the sequence gate
+
+The gate as first written was nearly unsatisfiable. `mtfGapBar` was stamped with
+`bar_index` on **every** bar price sat inside the MTF gap, so while price was still
+in the gap it always equalled "now" — and `mtfGapBar <= confirmation bar` can never
+hold when the confirmation landed a bar or two earlier. It only passed in the
+narrow case where price had already left the gap.
+
+`mtfGapBar` now records the bar the current **visit** into the gap began, which is
+the "pulled in" event the model actually means. A separate `mtfLastInBar` tracks how
+recently price was inside, which is what the Pullback freshness window wants. Two
+different questions that were sharing one variable.
+
 ## Why TP1 was not on the near wick
 
 The stop was too wide, so 1R was too far, so the first anchor at or beyond 1R
