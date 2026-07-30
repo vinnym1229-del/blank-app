@@ -1399,6 +1399,7 @@ fvgTf5 = input.timeframe("240", "HTF c", group = groupFvg)
 fvgBodyPct     = input.float(50.0, "Displacement body % of range", minval = 10, maxval = 95, group = groupFvg)
 gapExtendBars  = input.int(20, "Extend gaps this many bars past price", minval = 2, maxval = 100, group = groupFvg)
 gapMergeTicks  = input.int(8, "Treat gaps within N ticks as the same gap", minval = 1, maxval = 100, group = groupFvg)
+gapLabelStagger = input.int(2, "Stagger gap labels per timeframe (bars)", minval = 0, maxval = 12, group = groupFvg, tooltip = "A low-timeframe gap inside a higher one is intentional, so their two centre-right labels would print on the same spot. This offsets each timeframe.")
 gapFirstLast   = input.bool(true, "Keep only the first and last gap of each leg", group = groupFvg, tooltip = "Respected and inverted gaps are always kept regardless.")
 maxTotalGaps   = input.int(18, "Max gaps on the chart (all timeframes)", minval = 4, maxval = 80, group = groupFvg, tooltip = "Hard ceiling so the drawing budget cannot overrun. The lowest-timeframe, oldest gap is dropped first.")
 gapPruneAll    = input.bool(false, "Prune overlaps across every timeframe", group = groupFvg, tooltip = "Off: a higher timeframe only removes an overlapping gap inside the same tier (30s vs 1m, 5m vs 15m, 15m/1H/4H). This keeps the 1m gap that sits inside a 5m gap, which the confirmation leg of the model depends on.")
@@ -1498,7 +1499,7 @@ f_layoutGap(Gap g) =>
     box.set_rightbottom(g.bx, rx, g.bot)
     line.set_xy1(g.ce, g.leftTime, mid)
     line.set_xy2(g.ce, rx, mid)
-    label.set_xy(g.lb, rx, mid)
+    label.set_xy(g.lb, rx - g.rank * gapLabelStagger * chartMs, mid)
     0
 
 f_delGap(array<Gap> gs, int i) =>
@@ -1549,19 +1550,23 @@ f_nearestHtfCe(array<Gap> gs, float px, bool up) =>
                     best := na(best) ? ce : math.max(best, ce)
     best
 
-// 30s vs 1m, 5m vs 15m, 15m/1H/4H
+// Two competing bands that never compete across the boundary.
+//   LTF     : 30s vs 1m                - 1m wins
+//   MTF/HTF : 5m vs 15m vs 1H vs 4H    - the higher timeframe always wins
+// A 1m gap inside a 15m gap is NOT an overlap to resolve: that pairing IS the
+// setup - a higher-timeframe gap fill with a low-timeframe inversion out of it -
+// so the two must coexist. An inverted or already-tapped gap is never pruned.
 f_sameTier(int a, int b) =>
     bool lo = a <= 1 and b <= 1
-    bool mid = (a == 2 or a == 3) and (b == 2 or b == 3)
-    bool hi = a >= 3 and b >= 3
-    lo or mid or hi
+    bool hi = a >= 2 and b >= 2
+    lo or hi
 
 f_makeGap(float top, float bot, float wickHi, float wickLo, int leftTime, int tfSec, string tfName, int rank, bool bull, bool bpr, int lId, int lIdx) =>
     int rx = f_rightX(gapExtendBars)
     float mid = (top + bot) / 2
     box bx = box.new(leftTime, top, rx, bot, xloc = xloc.bar_time, border_color = color.black, border_width = 1)
     line ce = line.new(leftTime, mid, rx, mid, xloc = xloc.bar_time, style = line.style_dashed, width = 1)
-    label lb = label.new(rx, mid, "", xloc = xloc.bar_time, style = label.style_label_right, color = color.new(color.black, 100), size = size.normal, textalign = text.align_right)
+    label lb = label.new(rx - rank * gapLabelStagger * chartMs, mid, "", xloc = xloc.bar_time, style = label.style_label_right, color = color.new(color.black, 100), size = size.normal, textalign = text.align_right)
     Gap g = Gap.new(bx = bx, ce = ce, lb = lb, top = top, bot = bot, wickHi = wickHi, wickLo = wickLo, tfSec = tfSec, tfName = tfName, rank = rank, bull = bull, inverted = false, bpr = bpr, leftTime = leftTime, bornBar = bar_index, touched = false, respected = false, legId = lId, legIdx = lIdx)
     f_styleGap(g)
     g
@@ -2441,11 +2446,10 @@ planStopColor  = input.color(#F23645, "Stop line", group = groupPlan)
 planTpColor    = input.color(#089981, "Target lines", group = groupPlan)
 bannerActive   = input.color(#363A45, "Banner while open", group = groupPlan)
 bannerWin      = input.color(#089981, "Banner on a win", group = groupPlan)
-bannerBe       = input.color(#000000, "Banner on breakeven", group = groupPlan)
 bannerLoss     = input.color(#F23645, "Banner on a loss", group = groupPlan)
-zoneProfit     = input.color(#787B86, "Upper zone", group = groupPlan)
+zoneProfit     = input.color(#2A2E39, "Upper zone (profit on a long)", group = groupPlan)
 zoneRisk       = input.color(#F23645, "Lower zone", group = groupPlan)
-zoneTransp     = input.int(80, "Zone transparency", minval = 0, maxval = 95, group = groupPlan)
+zoneTransp     = input.int(74, "Zone transparency", minval = 40, maxval = 95, group = groupPlan, tooltip = "Never fully solid - the candles must stay readable through it.")
 
 type Trade
     bool   isLong
@@ -2468,6 +2472,8 @@ type Trade
     string grade
     string setup
     string why
+    float  risk0
+    float  plannedR
     int    contracts
     bool   beMoved
     bool   counted
@@ -2484,6 +2490,8 @@ var array<int>   st2    = array.new_int(9, 0)
 var array<int>   st1    = array.new_int(9, 0)
 var array<int>   stLoss = array.new_int(9, 0)
 var array<float> stCap  = array.new_float(9, 0.0)
+var array<float> stR    = array.new_float(9, 0.0)
+var array<float> stPlanR = array.new_float(9, 0.0)
 
 f_alloc(int k) =>
     k == 0 ? tp1Alloc : k == 1 ? tp2Alloc : k == 2 ? tp3Alloc : tp4Alloc
@@ -2501,8 +2509,9 @@ f_bannerText(Trade t) =>
     string body = t.setup + " | " + t.why
     t.active ? head + "\n" + body : head + "\n" + body + "\n" + f_outcome(t.hits)
 
+// reaching TP1 banked profit, so it is green even if the runner came back to BE
 f_bannerColor(Trade t) =>
-    t.active ? bannerActive : t.hits == 0 ? bannerLoss : t.hits == 1 ? bannerBe : bannerWin
+    t.active ? bannerActive : t.hits == 0 ? bannerLoss : bannerWin
 
 f_delTrade(array<Trade> ts, int i) =>
     Trade t = array.get(ts, i)
@@ -2546,12 +2555,14 @@ f_newTrade(bool isLong, float entry, float stop, float p1, float p2, float p3, f
         array.push(ends, na)
         if k >= 2
             array.push(hits, false)
+    float risk0 = math.abs(entry - stop)
+    float plannedR = na(p2) or risk0 <= 0 ? na : math.abs(p2 - entry) / risk0
     float far = na(p4) or not useTp4 ? p3 : p4
     int rx = f_rightX(planExtendBars)
     box bu = box.new(time, isLong ? far : stop, rx, entry, xloc = xloc.bar_time, border_color = color.new(zoneProfit, 70), bgcolor = color.new(zoneProfit, zoneTransp))
     box bl = box.new(time, entry, rx, isLong ? stop : far, xloc = xloc.bar_time, border_color = color.new(zoneRisk, 70), bgcolor = color.new(zoneRisk, zoneTransp))
     label le = label.new(time, isLong ? low : high, "", xloc = xloc.bar_time, style = isLong ? label.style_label_up : label.style_label_down, color = bannerActive, textcolor = color.white, size = size.normal, textalign = text.align_left)
-    Trade t = Trade.new(isLong = isLong, entry = entry, stop = stop, px = px, lnA = la, lnB = lb, lbs = lbl, lnEnd = ends, tpHit = hits, bxUpper = bu, bxLower = bl, lbEntry = le, startTime = time, startBar = bar_index, endTime = na, active = true, hits = 0, grade = grade, setup = setup, why = why, contracts = contracts, beMoved = false, counted = false, riskGone = false)
+    Trade t = Trade.new(isLong = isLong, entry = entry, stop = stop, px = px, lnA = la, lnB = lb, lbs = lbl, lnEnd = ends, tpHit = hits, bxUpper = bu, bxLower = bl, lbEntry = le, startTime = time, startBar = bar_index, endTime = na, active = true, hits = 0, grade = grade, setup = setup, why = why, risk0 = risk0, plannedR = plannedR, contracts = contracts, beMoved = false, counted = false, riskGone = false)
     label.set_text(le, f_bannerText(t))
     t
 
@@ -2609,6 +2620,20 @@ f_updateTrade(Trade t) =>
             label.set_textcolor(t.lbEntry, color.white)
     t.active
 
+f_realisedR(Trade t) =>
+    float r = 0.0
+    float remaining = 100.0
+    if array.size(t.tpHit) > 0 and t.risk0 > 0
+        for k = 0 to array.size(t.tpHit) - 1
+            if array.get(t.tpHit, k)
+                float lvl = array.get(t.px, k + 2)
+                if not na(lvl)
+                    r += f_alloc(k) / 100.0 * math.abs(lvl - t.entry) / t.risk0
+                    remaining -= f_alloc(k)
+    if remaining > 0
+        r += remaining / 100.0 * (t.beMoved ? 0.0 : -1.0)
+    r
+
 f_capPct(Trade t) =>
     float cap = 0.0
     if array.size(t.tpHit) > 0
@@ -2617,10 +2642,12 @@ f_capPct(Trade t) =>
                 cap += f_alloc(k)
     cap
 
-f_record(array<int> n, array<int> fw, array<int> a3, array<int> a2, array<int> a1, array<int> ls, array<float> cp, int idx, int hits, float cap, int maxTp) =>
+f_record(array<int> n, array<int> fw, array<int> a3, array<int> a2, array<int> a1, array<int> ls, array<float> cp, array<float> rr, array<float> pr, int idx, int hits, float cap, float rval, float pval, int maxTp) =>
     if idx >= 0
         array.set(n, idx, array.get(n, idx) + 1)
         array.set(cp, idx, array.get(cp, idx) + cap)
+        array.set(rr, idx, array.get(rr, idx) + rval)
+        array.set(pr, idx, array.get(pr, idx) + (na(pval) ? 0.0 : pval))
         if hits >= maxTp
             array.set(fw, idx, array.get(fw, idx) + 1)
         else if hits == 3
@@ -2654,8 +2681,9 @@ if array.size(trades) > 0
         if wasActive and not t.active and not t.counted
             t.counted := true
             int maxTp = useTp4 ? 4 : 3
-            f_record(stN, stFull, st3, st2, st1, stLoss, stCap, f_gradeIdx(t.grade), t.hits, f_capPct(t), maxTp)
-            f_record(stN, stFull, st3, st2, st1, stLoss, stCap, t.setup == "Continuation" ? 7 : 8, t.hits, f_capPct(t), maxTp)
+            float rv = f_realisedR(t)
+            f_record(stN, stFull, st3, st2, st1, stLoss, stCap, stR, stPlanR, f_gradeIdx(t.grade), t.hits, f_capPct(t), rv, t.plannedR, maxTp)
+            f_record(stN, stFull, st3, st2, st1, stLoss, stCap, stR, stPlanR, t.setup == "Continuation" ? 7 : 8, t.hits, f_capPct(t), rv, t.plannedR, maxTp)
             array.set(trades, i, t)
         if doLayout
             f_layoutTrade(t)
@@ -2718,7 +2746,7 @@ f_ago(int b) =>
 
 var table clTbl = table.new(position.middle_right, 3, 15, bgcolor = panelBg, border_width = 1, frame_width = 1, frame_color = color.new(color.gray, 40))
 var table dgTbl = table.new(position.bottom_left, 2, 14, bgcolor = panelBg, border_width = 1, frame_width = 1, frame_color = color.new(color.gray, 40))
-var table stTbl = table.new(position.bottom_right, 8, 13, bgcolor = panelBg, border_width = 1, frame_width = 1, frame_color = color.new(color.gray, 40))
+var table stTbl = table.new(position.bottom_right, 10, 13, bgcolor = panelBg, border_width = 1, frame_width = 1, frame_color = color.new(color.gray, 40))
 
 f_r2(table tb, int r, string a, string b, color bc) =>
     table.cell(tb, 0, r, a, text_color = panelText, text_size = size.small, text_halign = text.align_left)
@@ -2771,9 +2799,11 @@ if showDiag and barstate.islast
 f_statName(int i) =>
     i == 0 ? "A+" : i == 1 ? "A" : i == 2 ? "A-" : i == 3 ? "B+" : i == 4 ? "B" : i == 5 ? "B-" : i == 6 ? "C" : i == 7 ? "Continuation" : "Reversal"
 
-f_statRow(table tb, int r, string nm, int n, int fw, int a3, int a2, int a1, int ls, float cp) =>
+f_statRow(table tb, int r, string nm, int n, int fw, int a3, int a2, int a1, int ls, float cp, float rsum, float psum) =>
     float winPct = n > 0 ? float(n - ls) / float(n) * 100.0 : na
     float avgCap = n > 0 ? cp / float(n) : na
+    float avgR   = n > 0 ? rsum / float(n) : na
+    float avgPl  = n > 0 ? psum / float(n) : na
     table.cell(tb, 0, r, nm, text_color = panelText, text_size = size.tiny, text_halign = text.align_left)
     table.cell(tb, 1, r, str.tostring(n), text_color = panelText, text_size = size.tiny)
     table.cell(tb, 2, r, str.tostring(fw), text_color = panelText, text_size = size.tiny)
@@ -2782,11 +2812,13 @@ f_statRow(table tb, int r, string nm, int n, int fw, int a3, int a2, int a1, int
     table.cell(tb, 5, r, str.tostring(a1), text_color = panelText, text_size = size.tiny)
     table.cell(tb, 6, r, str.tostring(ls), text_color = panelText, text_size = size.tiny)
     table.cell(tb, 7, r, (na(winPct) ? "-" : str.tostring(winPct, "#") + "%") + " / " + (na(avgCap) ? "-" : str.tostring(avgCap, "#") + "%"), text_color = panelText, text_size = size.tiny)
+    table.cell(tb, 8, r, na(avgR) ? "-" : str.tostring(avgR, "#.##") + "R", text_color = na(avgR) ? panelText : avgR >= 0 ? color.new(#089981, 0) : color.new(#F23645, 0), text_size = size.tiny)
+    table.cell(tb, 9, r, na(avgPl) ? "-" : str.tostring(avgPl, "#.#") + "R", text_color = panelText, text_size = size.tiny)
     0
 
 if showStats and barstate.islast
     table.set_position(stTbl, f_pos(statsPos))
-    table.clear(stTbl, 0, 0, 7, 12)
+    table.clear(stTbl, 0, 0, 9, 12)
     table.cell(stTbl, 0, 0, "Bucket", text_color = panelText, text_size = size.tiny, text_halign = text.align_left)
     table.cell(stTbl, 1, 0, "N", text_color = panelText, text_size = size.tiny)
     table.cell(stTbl, 2, 0, "Full", text_color = panelText, text_size = size.tiny)
@@ -2795,6 +2827,8 @@ if showStats and barstate.islast
     table.cell(stTbl, 5, 0, "1TP", text_color = panelText, text_size = size.tiny)
     table.cell(stTbl, 6, 0, "Loss", text_color = panelText, text_size = size.tiny)
     table.cell(stTbl, 7, 0, "Win / cap", text_color = panelText, text_size = size.tiny)
+    table.cell(stTbl, 8, 0, "avg R", text_color = panelText, text_size = size.tiny)
+    table.cell(stTbl, 9, 0, "plan R", text_color = panelText, text_size = size.tiny)
     int tN = 0
     int tF = 0
     int t3 = 0
@@ -2802,6 +2836,8 @@ if showStats and barstate.islast
     int t1 = 0
     int tL = 0
     float tC = 0.0
+    float tR = 0.0
+    float tP = 0.0
     int aN = 0
     int aF = 0
     int a3s = 0
@@ -2809,8 +2845,10 @@ if showStats and barstate.islast
     int a1s = 0
     int aL = 0
     float aC = 0.0
+    float aR = 0.0
+    float aP = 0.0
     for gi = 0 to 8
-        f_statRow(stTbl, gi + 1, f_statName(gi), array.get(stN, gi), array.get(stFull, gi), array.get(st3, gi), array.get(st2, gi), array.get(st1, gi), array.get(stLoss, gi), array.get(stCap, gi))
+        f_statRow(stTbl, gi + 1, f_statName(gi), array.get(stN, gi), array.get(stFull, gi), array.get(st3, gi), array.get(st2, gi), array.get(st1, gi), array.get(stLoss, gi), array.get(stCap, gi), array.get(stR, gi), array.get(stPlanR, gi))
         if gi <= 6
             tN += array.get(stN, gi)
             tF += array.get(stFull, gi)
@@ -2819,6 +2857,8 @@ if showStats and barstate.islast
             t1 += array.get(st1, gi)
             tL += array.get(stLoss, gi)
             tC += array.get(stCap, gi)
+            tR += array.get(stR, gi)
+            tP += array.get(stPlanR, gi)
         if gi <= 2
             aN += array.get(stN, gi)
             aF += array.get(stFull, gi)
@@ -2827,8 +2867,10 @@ if showStats and barstate.islast
             a1s += array.get(st1, gi)
             aL += array.get(stLoss, gi)
             aC += array.get(stCap, gi)
-    f_statRow(stTbl, 10, "A- to A+", aN, aF, a3s, a2s, a1s, aL, aC)
-    f_statRow(stTbl, 11, "Overall", tN, tF, t3, t2, t1, tL, tC)
+            aR += array.get(stR, gi)
+            aP += array.get(stPlanR, gi)
+    f_statRow(stTbl, 10, "A- to A+", aN, aF, a3s, a2s, a1s, aL, aC, aR, aP)
+    f_statRow(stTbl, 11, "Overall", tN, tF, t3, t2, t1, tL, tC, tR, tP)
 
 bool planFiredThisBar = not na(lastTradeBar) and lastTradeBar == bar_index
 alertcondition(planFiredThisBar, "NLM setup", "An NLM setup qualified and a trade plan was drawn.")

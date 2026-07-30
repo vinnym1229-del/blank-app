@@ -125,6 +125,55 @@ inverts coming back out of it. That order is now enforced —
 than wonder. `Enforce sweep -> MTF gap -> confirmation ORDER` in the Model group
 turns it off if it proves too strict.
 
+## Overlap priority — corrected to your rule
+
+Previously three tiers: {30s,1m}, {5m,15m}, {15m,1H,4H}. That meant **5m vs 1H never
+competed**, because rank 2 and rank 4 fell in different tiers. Your "etc." says the whole
+MTF/HTF chain competes, so there are now two bands:
+
+- **LTF**: 30s vs 1m — 1m wins.
+- **MTF/HTF**: 5m vs 15m vs 1H vs 4H — the higher timeframe always wins, every pairing.
+
+The two bands never compete across the boundary. A 1m gap inside a 15m gap is not an
+overlap to resolve — that pairing *is* the setup, a higher-timeframe gap fill with a
+low-timeframe inversion out of it — so both survive. Any gap that has been touched,
+respected, inverted or promoted to a BPR is exempt from pruning entirely, so an inverted
+gap stays available to trade.
+
+A unit check now asserts the rule directly: (2,4) and (2,5) must compete, (1,3) and (1,5)
+must not.
+
+## Overlapping labels
+
+Same-band gaps can no longer overlap, but a LTF gap inside a HTF gap is deliberate, and
+their two centre-right labels would land on the same pixel. Each timeframe's label is now
+staggered by `Stagger gap labels per timeframe` (2 bars), so `1m FVG` and `15m FVG` never
+print on top of each other.
+
+## Long profit zone
+
+Was `#787B86` at 80% — too pale to see. Now `#2A2E39` at **74%**, and the transparency
+input has a floor of 40 so it can never be made fully solid; the candles stay readable
+through it.
+
+## R in the stats
+
+The stats table gained two columns:
+
+- **avg R** — realised R per trade, green when positive. Each target banks its allocation
+  at its own R multiple, and the remainder exits at the final stop: 0R if TP1 moved it to
+  breakeven, −1R if it never got there. So a 50%-at-1R then breakeven trade reads +0.50R,
+  not "a win" and not "a loss".
+- **plan R** — the average RR the plan was drawn at, so you can see execution against intent.
+
+Both break down by grade, by Continuation vs Reversal, and in the A-to-A+ and Overall rows.
+
+## Reaching TP1 is a win
+
+The entry banner no longer goes black on a trade that hit TP1 and came back to breakeven —
+that trade banked profit, so it is **green**. Black is gone entirely; red is reserved for a
+trade that never reached a target.
+
 ## Styling audit against your spec
 
 Audited the code line by line against every point in your styling brief rather than
